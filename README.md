@@ -82,8 +82,8 @@ Sentinel aims to bridge this gap with:
 ### 1) Clone and install backend deps
 
 ```bash
-git clone https://github.com/somthebuilder/Sentine_Finance.git
-cd Sentine_Finance/backend
+git clone https://github.com/somthebuilder/Sentinel_Finance.git
+cd Sentinel_Finance/backend
 npm install
 ```
 
@@ -167,7 +167,7 @@ Indian stock market, stock screener, macro trends, AI investing, fundamental ana
 ## Repository Metadata Recommendations
 
 For best GitHub discoverability:
-- **Repository name:** `Sentine_Finance` (already updated)
+- **Repository name:** `Sentinel_Finance` (already updated)
 - **Description:** `AI-assisted macro + quantitative engine to discover high-growth Indian stocks`
 - **Suggested topics:** `stock-market`, `india`, `finance`, `investing`, `algorithmic-trading`, `quant`, `ai`, `stock-analysis`
 

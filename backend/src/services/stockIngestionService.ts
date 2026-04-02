@@ -15,6 +15,18 @@ export type StockInput = {
   momentumScore?: number | string;
 };
 
+export type CsvParseDiagnostics = {
+  delimiter: "," | ";" | "\t";
+  headerRowIndex: number;
+  headerColumns: string[];
+  canonicalMap: Record<string, string>;
+  unmatchedHeaders: string[];
+  totalDataRows: number;
+  acceptedRows: number;
+  skippedRows: number;
+  skippedReasons: Record<string, number>;
+};
+
 function normalizeSector(value: string | undefined) {
   return (value ?? "")
     .toString()
@@ -74,11 +86,33 @@ export function validateStock(stock: Stock): void {
 }
 
 export function parseCsvToStockInputs(csv: string): StockInput[] {
+  return parseCsvToStockInputsWithDiagnostics(csv).rows;
+}
+
+export function parseCsvToStockInputsWithDiagnostics(csv: string): {
+  rows: StockInput[];
+  diagnostics: CsvParseDiagnostics;
+} {
   const lines = csv
     .split(/\r?\n/)
     .map((l) => l.trim())
     .filter(Boolean);
-  if (lines.length < 2) return [];
+  if (lines.length < 2) {
+    return {
+      rows: [],
+      diagnostics: {
+        delimiter: ",",
+        headerRowIndex: 0,
+        headerColumns: [],
+        canonicalMap: {},
+        unmatchedHeaders: [],
+        totalDataRows: 0,
+        acceptedRows: 0,
+        skippedRows: 0,
+        skippedReasons: { notEnoughLines: 1 },
+      },
+    };
+  }
 
   const pickDelimiter = (line: string) => {
     const tabs = (line.match(/\t/g) ?? []).length;
@@ -90,7 +124,7 @@ export function parseCsvToStockInputs(csv: string): StockInput[] {
     return ",";
   };
 
-  const delimiter = pickDelimiter(lines[0]);
+  const delimiter = pickDelimiter(lines[0]) as "," | ";" | "\t";
   const splitQuoted = (line: string, delim: string): string[] => {
     if (delim === "\t") return line.split("\t").map((c) => c.trim());
     const out: string[] = [];
@@ -131,13 +165,32 @@ export function parseCsvToStockInputs(csv: string): StockInput[] {
 
   const header = splitQuoted(lines[headerLineIdx], delimiter);
   const idx = buildCanonicalHeaderIndex(header);
+  const canonicalMap: Record<string, string> = {};
+  for (const [canonical, colIndex] of Object.entries(idx)) {
+    if (colIndex !== undefined && header[colIndex] !== undefined) {
+      canonicalMap[canonical] = header[colIndex];
+    }
+  }
+  const matchedHeaderIndexes = new Set<number>(Object.values(idx));
+  const unmatchedHeaders = header.filter((_h, i) => !matchedHeaderIndexes.has(i));
 
   const out: StockInput[] = [];
+  const skippedReasons: Record<string, number> = {};
+  const bumpSkip = (reason: string) => {
+    skippedReasons[reason] = (skippedReasons[reason] ?? 0) + 1;
+  };
   for (const line of lines.slice(headerLineIdx + 1)) {
     const cols = splitQuoted(line, delimiter);
     const get = (k: string) => (idx[k] === undefined ? undefined : cols[idx[k]]);
     const rawName = (get("name") ?? cols[0] ?? "").toString().trim();
-    if (!rawName || /^\d+$/.test(rawName)) continue;
+    if (!rawName) {
+      bumpSkip("missingName");
+      continue;
+    }
+    if (/^\d+$/.test(rawName)) {
+      bumpSkip("rankOnlyRow");
+      continue;
+    }
     const sector = (get("sector") ?? get("subSector") ?? "Unknown").toString().trim() || "Unknown";
     const subSector = (get("subSector") ?? get("sector") ?? "").toString().trim();
     const revenueProxy = get("revenueGrowth") ?? get("netProfitYoYGrowth") ?? get("roe");
@@ -169,6 +222,18 @@ export function parseCsvToStockInputs(csv: string): StockInput[] {
       momentumScore: momentumProxy,
     } satisfies StockInput);
   }
-  return out;
+  const totalDataRows = Math.max(0, lines.length - (headerLineIdx + 1));
+  const diagnostics: CsvParseDiagnostics = {
+    delimiter,
+    headerRowIndex: headerLineIdx,
+    headerColumns: header,
+    canonicalMap,
+    unmatchedHeaders,
+    totalDataRows,
+    acceptedRows: out.length,
+    skippedRows: Math.max(0, totalDataRows - out.length),
+    skippedReasons,
+  };
+  return { rows: out, diagnostics };
 }
 

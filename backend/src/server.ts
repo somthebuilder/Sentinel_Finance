@@ -9,7 +9,14 @@ import { rankStocksByTheme } from "./services/scoringService";
 import { addStocks, getStocks } from "./store/stockStore";
 import { getDynamicMacroThemes, macroThemesToThemeModels } from "./services/macroThemeService";
 import { getBaseThemes } from "./services/themeService";
-import { StockInput, parseCsvToStockInputs, parseStockInput, validateStock } from "./services/stockIngestionService";
+import {
+  CsvParseDiagnostics,
+  StockInput,
+  parseCsvToStockInputs,
+  parseCsvToStockInputsWithDiagnostics,
+  parseStockInput,
+  validateStock,
+} from "./services/stockIngestionService";
 import { enrichTagsIfNeeded } from "./services/aiEnrichmentService";
 
 dotenv.config();
@@ -131,6 +138,7 @@ app.post(
   "/stocks",
   asyncHandler(async (req, res) => {
     let stockInputs: StockInput[] = [];
+    let parseDiagnostics: CsvParseDiagnostics | null = null;
     const body = req.body as any;
 
     if (Array.isArray(body)) {
@@ -139,7 +147,9 @@ app.post(
       if (Array.isArray(body.stocks)) {
         stockInputs = body.stocks as StockInput[];
       } else if (typeof body.csv === "string") {
-        stockInputs = parseCsvToStockInputs(body.csv);
+        const parsedCsv = parseCsvToStockInputsWithDiagnostics(body.csv);
+        stockInputs = parsedCsv.rows;
+        parseDiagnostics = parsedCsv.diagnostics;
       } else if (typeof body.text === "string") {
         stockInputs = parseCsvToStockInputs(body.text);
       } else if (typeof body.data === "string") {
@@ -154,6 +164,7 @@ app.post(
         ok: false,
         error: "ValidationError",
         message: "No stock rows found in payload",
+        parseDiagnostics,
       });
     }
 
@@ -179,6 +190,7 @@ app.post(
         error: "ValidationError",
         message: "No valid stock rows found",
         rejected: rejected.slice(0, 20),
+        parseDiagnostics,
       });
     }
 
@@ -190,6 +202,7 @@ app.post(
       totalStocks: getStocks().length,
       rejected: rejected.length,
       rejectedSample: rejected.slice(0, 10),
+      parseDiagnostics,
     });
   })
 );

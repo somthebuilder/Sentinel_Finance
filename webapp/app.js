@@ -660,6 +660,34 @@ async function fetchJson(path) {
   return res.json();
 }
 
+function renderParseDiagnostics(diag) {
+  const box = $("stocksDiagnostics");
+  if (!box) return;
+  if (!diag || typeof diag !== "object") {
+    box.hidden = true;
+    box.textContent = "";
+    return;
+  }
+
+  const canonicalPairs = Object.entries(diag.canonicalMap ?? {})
+    .map(([k, v]) => `${k} -> ${v}`)
+    .slice(0, 14);
+  const skippedPairs = Object.entries(diag.skippedReasons ?? {})
+    .map(([k, v]) => `${k}: ${v}`)
+    .join(", ");
+  const unmatched = Array.isArray(diag.unmatchedHeaders) ? diag.unmatchedHeaders.slice(0, 12).join(", ") : "";
+
+  box.textContent =
+    `Parse report\n` +
+    `- delimiter: ${diag.delimiter ?? "unknown"}\n` +
+    `- headerRowIndex: ${diag.headerRowIndex ?? 0}\n` +
+    `- acceptedRows: ${diag.acceptedRows ?? 0}/${diag.totalDataRows ?? 0}\n` +
+    `- skippedRows: ${diag.skippedRows ?? 0}${skippedPairs ? ` (${skippedPairs})` : ""}\n` +
+    `- mappedHeaders: ${canonicalPairs.join(" | ") || "none"}\n` +
+    `- unmatchedHeaders: ${unmatched || "none"}`;
+  box.hidden = false;
+}
+
 async function loadThemes() {
   const status = $("trendsStatus");
   showStatus(status, "Loading themes...", null);
@@ -731,13 +759,18 @@ async function submitStocks() {
       body: JSON.stringify(payload),
     });
 
+    const data = await res.json().catch(() => null);
     if (!res.ok) {
-      const text = await res.text().catch(() => "");
+      if (data?.parseDiagnostics) renderParseDiagnostics(data.parseDiagnostics);
+      const text = data ? JSON.stringify(data) : await res.text().catch(() => "");
       throw new Error(`Request failed (${res.status}). ${text}`.trim());
     }
 
+    renderParseDiagnostics(data?.parseDiagnostics ?? null);
     hasSubmittedStocks = true;
-    showStatus(status, "Stocks saved. Refreshing recommendations...", null);
+    const accepted = Number(data?.received ?? 0);
+    const rejected = Number(data?.rejected ?? 0);
+    showStatus(status, `Stocks saved (${accepted} accepted, ${rejected} rejected). Refreshing recommendations...`, null);
     await loadThemes();
     await loadRecommendations();
   } catch (e) {
