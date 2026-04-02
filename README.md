@@ -18,7 +18,11 @@ Sentinel helps you answer:
 
 ![Sentinel macro themes dashboard](docs/images/sentinel-themes.png)
 
-### Recommendations + Stock Ingestion
+### Add Stocks Workflow
+
+![Sentinel stock ingestion workflow](docs/images/sentinel-add-stocks.png)
+
+### Recommendations by Theme
 
 ![Sentinel recommendations and stock ingestion workflow](docs/images/sentinel-recommendations.png)
 
