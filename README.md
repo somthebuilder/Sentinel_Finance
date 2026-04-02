@@ -1,16 +1,15 @@
-# Sentinel - Find High-Growth Indian Stocks Using Macro Trends + Quant Scoring
+# Sentinel - Find High-Growth Indian Stocks from Macro Trends
 
 <p align="center">
   <img src="webapp/assets/logo.svg" alt="Sentinel logo" width="96" />
 </p>
 
-**Sentinel** is an AI-assisted macro + quantitative engine to discover high-growth Indian stocks using macro trends, fundamental signals, and deterministic scoring.
+**Sentinel** is a macro-driven stock discovery engine that identifies which stocks are most likely to benefit from emerging economic and sector trends.
 
-This project is built for investors and builders who want a transparent, explainable **Indian stock market screener** combining:
-- macro trend discovery
-- fundamental analysis
-- quant-style scoring
-- AI-assisted keyword/reason enrichment (optional)
+Instead of screening stocks in isolation, Sentinel starts with what is happening in the real world - infrastructure spending, energy transitions, AI adoption - and maps those trends to stocks using deterministic logic and growth-focused scoring.
+
+Sentinel helps you answer:
+**"What stocks benefit from what is happening right now in the market?"**
 
 ## Product Preview
 
@@ -24,14 +23,20 @@ This project is built for investors and builders who want a transparent, explain
 
 ## Why Sentinel
 
-Most retail screeners either:
-- stop at raw metrics, or
-- give opaque "AI picks" with low explainability
+Most tools answer:
+**"What stocks look good?"**
 
-Sentinel aims to bridge this gap with:
-- **macro-aware themes** (India-focused sectors)
-- **deterministic scoring logic** (clear formulas)
-- **human-readable reasons** for each recommendation
+Sentinel answers:
+**"What stocks are positioned to benefit from what is happening right now?"**
+
+It bridges the gap between:
+- macro trends (news, sector flows)
+- and actionable stock ideas
+
+With:
+- deterministic mapping (no black-box AI picks)
+- growth-focused scoring (momentum + acceleration)
+- clear reasoning for every recommendation
 
 ## Core Features
 
@@ -142,34 +147,42 @@ Each stock row supports fields like:
 
 ## Roadmap
 
-### Near Term (0-2 months)
-- Add unit/integration tests for parsers and scoring pipeline
-- Improve error surfaces and data quality diagnostics in UI
-- Add saved watchlists and result snapshots
-- Add one-command local dev startup for backend + webapp
+### Phase 1: Signal Quality (Now)
+- Improve theme -> stock mapping accuracy
+- Strengthen growth + momentum detection
+- Add breakout identification signals
+- Improve tagging quality
 
-### Mid Term (2-4 months)
-- Backtesting module for scoring consistency over historical periods
-- Better factor weighting calibration for different market regimes
-- Expand data connectors (more Indian market/public data adapters)
-- Better ranking confidence diagnostics and uncertainty bands
+### Phase 2: Decision Layer
+- Add "Why now" signals (timing context)
+- Add conviction scoring and ranking tiers
+- Add leader vs follower detection within themes
 
-### Long Term (4+ months)
-- Portfolio construction layer (position sizing + risk constraints)
-- Personalized strategy templates (growth, value, momentum blends)
-- Collaboration features (shared watchlists, annotation, notes)
-- Cloud deployment with auth and multi-user workspaces
+### Phase 3: Validation Layer
+- Backtest theme -> stock performance
+- Track hit rate of recommendations
+- Add historical theme performance dashboards
+
+### Phase 4: Execution Layer
+- Entry timing signals (breakout vs pullback)
+- Position sizing suggestions
+- Risk flags and exit signals
+
+### Phase 5: Productization
+- Watchlists + alerts
+- Portfolio tracking
+- Multi-user SaaS
 
 ## SEO Keywords
 
-Indian stock market, stock screener, macro trends, AI investing, fundamental analysis, quantitative finance, growth investing, stock analysis India.
+Indian stock market, stock screener, macro trends, AI investing, fundamental analysis, growth investing, stock analysis India.
 
 ## Repository Metadata Recommendations
 
 For best GitHub discoverability:
 - **Repository name:** `Sentinel_Finance` (already updated)
-- **Description:** `AI-assisted macro + quantitative engine to discover high-growth Indian stocks`
-- **Suggested topics:** `stock-market`, `india`, `finance`, `investing`, `algorithmic-trading`, `quant`, `ai`, `stock-analysis`
+- **Description:** `Macro-driven stock discovery engine that maps real-world trends to high-growth Indian stocks using deterministic scoring`
+- **Suggested topics:** `stock-market`, `india`, `finance`, `investing`, `macro-trends`, `ai`, `stock-analysis`
 
 ## Disclaimer
 
