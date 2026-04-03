@@ -759,19 +759,17 @@ async function loadThemes() {
 }
 
 async function loadRecommendations() {
-  if (!hasSubmittedStocks) {
-    const status = $("recsStatus");
-    const list = $("recsList");
-    showStatus(status, "Paste stock data to generate recommendations.", null);
-    list.innerHTML = "";
-    return;
-  }
-
   const status = $("recsStatus");
   showStatus(status, "Loading recommendations...", null);
   try {
     const data = await fetchJson("/recommendations");
     const themesRanked = data.themes ?? data.recommendations ?? data.items ?? [];
+    if (!themesRanked.length && !hasSubmittedStocks) {
+      showStatus(status, "Paste stock data to generate recommendations.", null);
+      renderRecommendations([]);
+      return;
+    }
+    if (themesRanked.length) hasSubmittedStocks = true;
     renderRecommendations(themesRanked);
     status.textContent = "";
   } catch (e) {
