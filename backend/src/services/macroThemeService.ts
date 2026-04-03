@@ -45,8 +45,7 @@ const DEFAULT_INCLUDE_DOMAINS = [
   "business-standard.com",
   "screener.in",
 ];
-let cachedThemes: MacroTheme[] | null = null;
-let cachedAtMs = 0;
+const themeCache = new Map<string, { themes: MacroTheme[]; cachedAtMs: number }>();
 
 function getEnv(name: string): string | undefined;
 function getEnv(name: string, fallback: string): string;
@@ -74,6 +73,24 @@ function parseIncludeDomains(): string[] {
     .split(/[,\n]/g)
     .map((s) => s.trim())
     .filter(Boolean);
+}
+
+function sanitizeInputDomain(value: string): string {
+  const host = getHostname(value);
+  return host;
+}
+
+export function mergeNarrativeDomains(customDomains: string[] = []): string[] {
+  const merged = new Set<string>();
+  for (const d of parseIncludeDomains()) {
+    const clean = sanitizeInputDomain(d);
+    if (clean) merged.add(clean);
+  }
+  for (const d of customDomains) {
+    const clean = sanitizeInputDomain(d);
+    if (clean) merged.add(clean);
+  }
+  return Array.from(merged).slice(0, 7);
 }
 
 function getHostname(input: string | undefined): string {
@@ -252,11 +269,13 @@ export function buildThemesFromKeywords(keywords: string[], corpus: string, resu
     .slice(0, 6);
 }
 
-export async function getDynamicMacroThemes(): Promise<MacroTheme[]> {
+export async function getDynamicMacroThemes(customDomains: string[] = []): Promise<MacroTheme[]> {
   const ttlMs = Number(getEnv("THEMES_CACHE_TTL_MS", "7200000") ?? "7200000");
-  if (cachedThemes && Date.now() - cachedAtMs < ttlMs) return cachedThemes;
+  const includeDomains = mergeNarrativeDomains(customDomains);
+  const cacheKey = includeDomains.join("|");
+  const cached = themeCache.get(cacheKey);
+  if (cached && Date.now() - cached.cachedAtMs < ttlMs) return cached.themes;
 
-  const includeDomains = parseIncludeDomains();
   const results = await tavilySearch(buildMacroQuery(), includeDomains);
   const corpus = results
     .map((r) => `${r.title ?? ""}\n${(r.content ?? "").slice(0, 320)}`.trim())
@@ -265,8 +284,7 @@ export async function getDynamicMacroThemes(): Promise<MacroTheme[]> {
 
   const keywords = await extractKeywordsAI(corpus);
   const themes = buildThemesFromKeywords(keywords, corpus, results);
-  cachedThemes = themes;
-  cachedAtMs = Date.now();
+  themeCache.set(cacheKey, { themes, cachedAtMs: Date.now() });
   return themes;
 }
 

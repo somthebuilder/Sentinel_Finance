@@ -98,6 +98,15 @@ function asyncHandler(fn: express.RequestHandler) {
   };
 }
 
+function parseNarrativeSources(input: unknown): string[] {
+  if (typeof input !== "string") return [];
+  const items = input
+    .split(/[,\n]/g)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return items.slice(0, 7);
+}
+
 app.get("/", (_req, res) => {
   if (hasWebApp) return res.sendFile(indexHtmlPath);
   return res.json({ ok: true, service: "Personal Finance MVP API" });
@@ -112,9 +121,10 @@ app.get(
 
 app.get(
   "/trends",
-  asyncHandler(async (_req, res) => {
+  asyncHandler(async (req, res) => {
     // Dynamic macro themes (controlled vocabulary mapping).
-    const macroThemes = await getDynamicMacroThemes();
+    const domains = parseNarrativeSources(req.query.sources);
+    const macroThemes = await getDynamicMacroThemes(domains);
     const dynamicThemes = macroThemesToThemeModels(macroThemes);
     const themes = dynamicThemes.length ? dynamicThemes : getBaseThemes();
     res.json({ themes });
@@ -123,8 +133,9 @@ app.get(
 
 app.get(
   "/themes",
-  asyncHandler(async (_req, res) => {
-    const macroThemes = await getDynamicMacroThemes();
+  asyncHandler(async (req, res) => {
+    const domains = parseNarrativeSources(req.query.sources);
+    const macroThemes = await getDynamicMacroThemes(domains);
     const dynamicThemes = macroThemesToThemeModels(macroThemes);
     const themes = dynamicThemes.length ? dynamicThemes : getBaseThemes();
     res.json({ themes });
@@ -133,9 +144,10 @@ app.get(
 
 app.get(
   "/recommendations",
-  asyncHandler(async (_req, res) => {
+  asyncHandler(async (req, res) => {
     const stocks = getStocks();
-    const macroThemes = await getDynamicMacroThemes();
+    const domains = parseNarrativeSources(req.query.sources);
+    const macroThemes = await getDynamicMacroThemes(domains);
     const dynamicThemes = macroThemesToThemeModels(macroThemes);
     const themes = dynamicThemes.length ? dynamicThemes : getBaseThemes();
 

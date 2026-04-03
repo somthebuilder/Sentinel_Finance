@@ -21,6 +21,13 @@
       <div class="container">
         <section>
           <h2>Themes</h2>
+          <div class="hint">Narrative sources: add domains/URLs (comma or new line). Default sources are always included.</div>
+          <textarea
+            id="narrativeSourcesInput"
+            class="textarea narrativeSourcesInput"
+            placeholder="moneycontrol.com&#10;economictimes.indiatimes.com&#10;https://business-standard.com"
+          ></textarea>
+          <button id="runCombinedAnalysis" class="button secondaryButton" type="button">Run Combined Analysis</button>
           <div id="trendsStatus" class="status">Loading themes...</div>
           <div id="trendsList" class="cards"></div>
         </section>

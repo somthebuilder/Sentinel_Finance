@@ -23,6 +23,7 @@ import re
 import sys
 from dataclasses import dataclass
 from html import unescape
+from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -638,6 +639,22 @@ def parse_sector_list(raw_json: str) -> List[str]:
     return cleaned or DEFAULT_SECTORS
 
 
+def load_env_value(key: str, env_path: Path) -> Optional[str]:
+    if not env_path.exists():
+        return None
+    try:
+        for line in env_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            if k.strip() == key:
+                return v.strip().strip('"').strip("'")
+    except Exception:
+        return None
+    return None
+
+
 def print_cli_table(rows: List[dict]) -> None:
     print("\nRanked sectors:\n")
     print(f"{'Rank':<5} {'Sector':<16} {'Trend':>8} {'Narrative':>11} {'Cov':>6} {'FPI':>8} {'Final':>8} {'Status':>22}")
@@ -667,6 +684,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = build_arg_parser().parse_args()
+    if not args.tavily_api_key:
+        env_key = load_env_value("TAVILY_API_KEY", Path(__file__).resolve().parent / ".env")
+        if env_key:
+            args.tavily_api_key = env_key
 
     sectors = parse_sector_list(args.sectors_json)
     user_sources = parse_user_sources(args.user_sources_json)

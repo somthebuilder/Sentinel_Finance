@@ -3,6 +3,7 @@ function $(id) {
 }
 
 let hasSubmittedStocks = false;
+let activeNarrativeSources = [];
 
 function showStatus(el, msg, kind) {
   el.textContent = msg;
@@ -709,12 +710,43 @@ function renderRecommendations(themesRanked) {
 }
 
 async function fetchJson(path) {
-  const res = await fetch(path, { method: "GET" });
+  const endpoint = new URL(path, window.location.origin);
+  if (activeNarrativeSources.length) {
+    endpoint.searchParams.set("sources", activeNarrativeSources.join(","));
+  }
+  const res = await fetch(endpoint.toString(), { method: "GET" });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(`Request failed (${res.status}). ${text}`.trim());
   }
   return res.json();
+}
+
+function parseNarrativeSourcesInput(raw) {
+  const parts = (raw ?? "")
+    .split(/[,\n]/g)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const out = [];
+  const seen = new Set();
+  const toDomain = (value) => {
+    const v = value.trim();
+    if (!v) return "";
+    try {
+      const url = v.includes("://") ? new URL(v) : new URL(`https://${v}`);
+      return url.hostname.replace(/^www\./, "").toLowerCase();
+    } catch {
+      return "";
+    }
+  };
+  for (const p of parts) {
+    const d = toDomain(p);
+    if (!d || seen.has(d)) continue;
+    seen.add(d);
+    out.push(d);
+    if (out.length >= 7) break;
+  }
+  return out;
 }
 
 function renderParseDiagnostics(diag) {
@@ -775,6 +807,22 @@ async function loadRecommendations() {
   } catch (e) {
     showStatus(status, `Failed to load recommendations: ${e.message || e}`, "error");
   }
+}
+
+async function runCombinedAnalysis() {
+  const status = $("trendsStatus");
+  const input = $("narrativeSourcesInput");
+  const parsed = parseNarrativeSourcesInput(input ? input.value : "");
+  activeNarrativeSources = parsed;
+  showStatus(
+    status,
+    parsed.length
+      ? `Running analysis with ${parsed.length} custom narrative source(s)...`
+      : "Running analysis with default narrative sources...",
+    null
+  );
+  await loadThemes();
+  await loadRecommendations();
 }
 
 async function submitStocks() {
@@ -854,6 +902,7 @@ async function loadCsvFromFile() {
 document.addEventListener("DOMContentLoaded", () => {
   $("submitStocks").addEventListener("click", submitStocks);
   $("loadCsvFile").addEventListener("click", loadCsvFromFile);
+  $("runCombinedAnalysis").addEventListener("click", runCombinedAnalysis);
   loadThemes();
   loadRecommendations();
 });

@@ -319,6 +319,11 @@ h2 {
   outline: none;
 }
 
+.narrativeSourcesInput {
+  min-height: 78px;
+  margin-bottom: 8px;
+}
+
 .button {
   margin-top: 8px;
   width: 100%;
