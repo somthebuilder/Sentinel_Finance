@@ -90,6 +90,25 @@ export function scorePBVRelative(pbv: number, industryPbv: number): number {
 }
 
 /**
+ * Hard gate for recommendations: flag clear richness vs earnings (PEG) or vs industry PBV.
+ * Only applies when the relevant inputs are present; missing metrics do not force a fail.
+ */
+export function isOvervaluedByRules(stock: Stock): boolean {
+  const peg = stock.peg;
+  if (Number.isFinite(peg) && peg > 0 && peg > 2) return true;
+
+  const pbv = stock.pbv;
+  const ind = stock.industryPbv;
+  if (Number.isFinite(pbv) && Number.isFinite(ind) && ind > 0 && pbv / ind > 1.6) return true;
+
+  return false;
+}
+
+export function passesValuationGate(stock: Stock): boolean {
+  return !isOvervaluedByRules(stock);
+}
+
+/**
  * Ownership is usually a fraction (0–1) or percent (1–100). Screener exports often use large
  * activity/delivery figures; `normalize01` would clamp any value &gt; 100 to 1.0 and wipe out spread.
  */

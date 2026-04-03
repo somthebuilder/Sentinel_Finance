@@ -10,6 +10,7 @@ import {
   interpretMetricScores,
   isEliteByRules,
   normalize01,
+  passesValuationGate,
 } from "./financialRules";
 
 export type ScoreBreakdown = {
@@ -200,7 +201,7 @@ export async function rankStocksByTheme(themes: Theme[], stocks: Stock[]): Promi
     const strengthNormalized = Number.isFinite(strengthRaw) ? Math.max(0, Math.min(1, strengthRaw)) : 0;
 
     const scored = stocks
-      .filter(passesGrowthFilter)
+      .filter((s) => passesGrowthFilter(s) && passesValuationGate(s))
       .map((stock): StockRecommendation | null => {
         const details = calculateThemeRelevanceDetails(stock, theme);
 
