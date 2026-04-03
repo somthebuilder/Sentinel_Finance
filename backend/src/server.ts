@@ -6,7 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { rankStocksByTheme } from "./services/scoringService";
-import { addStocks, getStocks } from "./store/stockStore";
+import { addStocks, getStocks, replaceStocks } from "./store/stockStore";
 import { getDynamicMacroThemes, macroThemesToThemeModels } from "./services/macroThemeService";
 import { getBaseThemes } from "./services/themeService";
 import {
@@ -107,6 +107,31 @@ function parseNarrativeSources(input: unknown): string[] {
   return items.slice(0, 7);
 }
 
+function parseNarrativeUrls(input: unknown): string[] {
+  if (typeof input !== "string") return [];
+  const items = input
+    .split(/[,\n]/g)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of items) {
+    try {
+      const url = new URL(raw);
+      if (!/^https?:$/i.test(url.protocol)) continue;
+      url.hash = "";
+      const normalized = url.toString();
+      if (seen.has(normalized)) continue;
+      seen.add(normalized);
+      out.push(normalized);
+      if (out.length >= 7) break;
+    } catch {
+      // Ignore malformed URLs.
+    }
+  }
+  return out;
+}
+
 app.get("/", (_req, res) => {
   if (hasWebApp) return res.sendFile(indexHtmlPath);
   return res.json({ ok: true, service: "Personal Finance MVP API" });
@@ -124,7 +149,9 @@ app.get(
   asyncHandler(async (req, res) => {
     // Dynamic macro themes (controlled vocabulary mapping).
     const domains = parseNarrativeSources(req.query.sources);
-    const macroThemes = await getDynamicMacroThemes(domains);
+    const sourceUrls = parseNarrativeUrls(req.query.sourceUrls);
+    const forceRefresh = String(req.query.refresh ?? "").toLowerCase() === "1";
+    const macroThemes = await getDynamicMacroThemes(domains, sourceUrls, forceRefresh);
     const dynamicThemes = macroThemesToThemeModels(macroThemes);
     const themes = dynamicThemes.length ? dynamicThemes : getBaseThemes();
     res.json({ themes });
@@ -135,7 +162,9 @@ app.get(
   "/themes",
   asyncHandler(async (req, res) => {
     const domains = parseNarrativeSources(req.query.sources);
-    const macroThemes = await getDynamicMacroThemes(domains);
+    const sourceUrls = parseNarrativeUrls(req.query.sourceUrls);
+    const forceRefresh = String(req.query.refresh ?? "").toLowerCase() === "1";
+    const macroThemes = await getDynamicMacroThemes(domains, sourceUrls, forceRefresh);
     const dynamicThemes = macroThemesToThemeModels(macroThemes);
     const themes = dynamicThemes.length ? dynamicThemes : getBaseThemes();
     res.json({ themes });
@@ -146,8 +175,14 @@ app.get(
   "/recommendations",
   asyncHandler(async (req, res) => {
     const stocks = getStocks();
+    if (!stocks.length) {
+      // Fast path: no stock universe yet, avoid expensive theme fetch/enrichment.
+      return res.json({ themes: [], meta: { reason: "NO_STOCKS", stockCount: 0 } });
+    }
     const domains = parseNarrativeSources(req.query.sources);
-    const macroThemes = await getDynamicMacroThemes(domains);
+    const sourceUrls = parseNarrativeUrls(req.query.sourceUrls);
+    const forceRefresh = String(req.query.refresh ?? "").toLowerCase() === "1";
+    const macroThemes = await getDynamicMacroThemes(domains, sourceUrls, forceRefresh);
     const dynamicThemes = macroThemesToThemeModels(macroThemes);
     const themes = dynamicThemes.length ? dynamicThemes : getBaseThemes();
 
@@ -157,7 +192,13 @@ app.get(
       // use base themes so UI never returns a blank recommendation payload.
       themesRanked = await rankStocksByTheme(getBaseThemes(), stocks);
     }
-    res.json({ themes: themesRanked });
+    res.json({
+      themes: themesRanked,
+      meta: {
+        reason: themesRanked.length ? "OK" : "NO_MATCHES",
+        stockCount: stocks.length,
+      },
+    });
   })
 );
 
@@ -221,7 +262,12 @@ app.post(
       });
     }
 
-    addStocks(normalized);
+    const shouldReplace = body && typeof body === "object" && body.replace === true;
+    if (shouldReplace) {
+      replaceStocks(normalized);
+    } else {
+      addStocks(normalized);
+    }
 
     res.json({
       ok: true,
@@ -230,6 +276,7 @@ app.post(
       rejected: rejected.length,
       rejectedSample: rejected.slice(0, 10),
       parseDiagnostics,
+      mode: shouldReplace ? "replace" : "merge",
     });
   })
 );

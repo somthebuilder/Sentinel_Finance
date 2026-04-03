@@ -4,6 +4,15 @@ function $(id) {
 
 let hasSubmittedStocks = false;
 let activeNarrativeSources = [];
+let activeNarrativeUrls = [];
+let latestThemesRequestId = 0;
+let latestRecommendationsRequestId = 0;
+let recommendationsProgressTicker = null;
+const DEFAULT_NARRATIVE_SOURCES = [
+  "pulse.zerodha.com",
+  "equitymaster.com",
+  "moneycontrol.com",
+];
 
 function showStatus(el, msg, kind) {
   el.textContent = msg;
@@ -485,8 +494,23 @@ function renderThemes(themes) {
     if (t.rationale) {
       const rationale = document.createElement("div");
       rationale.className = "driverSnippet";
-      rationale.textContent = `Rationale: ${t.rationale}`;
+      // Keep rationale concise to avoid repetitive, verbose cards.
+      const strengthTxt = Number(t.strength ?? 0).toFixed(2);
+      rationale.textContent = `Rationale: strength ${strengthTxt} from blended macro + narrative signals.`;
       card.appendChild(rationale);
+    }
+
+    if (typeof t.marketScore === "number" || typeof t.narrativeScore === "number") {
+      const explain = document.createElement("div");
+      explain.className = "driverSnippet";
+      const market = Number(t.marketScore ?? 0).toFixed(2);
+      const narrative = Number(t.narrativeScore ?? 0).toFixed(2);
+      const overlapNum = Number(t.overlapBoost ?? 0);
+      const overlap = overlapNum.toFixed(2);
+      const evidence = Number(t.sourceEvidenceCount ?? 0);
+      const overlapBand = overlapNum >= 0.14 ? "High" : overlapNum >= 0.07 ? "Med" : "Low";
+      explain.textContent = `Signal mix -> Market: ${market}, User: ${narrative}, Overlap: ${overlap} [${overlapBand}], Evidence: ${evidence}`;
+      card.appendChild(explain);
     }
 
     list.appendChild(card);
@@ -507,214 +531,269 @@ function renderRecommendations(themesRanked) {
 
   const fmt01 = (x) => {
     const n = Number(x);
-    if (!Number.isFinite(n)) return "0.0%";
-    return `${(n * 100).toFixed(1)}%`;
+    if (!Number.isFinite(n)) return "1.0/5 (Low)";
+    const clipped = Math.max(0, Math.min(1, n));
+    const scaled = 1 + clipped * 4;
+    let band = "Low";
+    if (scaled >= 4.4) band = "Excellent";
+    else if (scaled >= 3.6) band = "Strong";
+    else if (scaled >= 2.8) band = "Good";
+    else if (scaled >= 2.0) band = "Fair";
+    return `${scaled.toFixed(1)}/5 (${band})`;
   };
 
+  const stockMap = new Map();
   for (const t of themesRanked) {
     const themeLabel = t.theme ?? "Theme";
     const topStocks = Array.isArray(t.topStocks) ? t.topStocks : [];
-    if (!topStocks.length) continue;
-
-    const card = document.createElement("div");
-    card.className = "card";
-
-    const topRow = document.createElement("div");
-    topRow.className = "cardTitleRow";
-
-    const title = document.createElement("div");
-    title.className = "themeTitle";
-    title.textContent = themeLabel;
-    topRow.appendChild(title);
-
-    const count = document.createElement("div");
-    count.className = "subtle";
-    count.textContent = `Top ${topStocks.length}`;
-    topRow.appendChild(count);
-
-    card.appendChild(topRow);
-
-    const stockList = document.createElement("div");
-    stockList.className = "stockList";
-
     for (const s of topStocks) {
-      const row = document.createElement("div");
-      row.className = "stockRow";
-
-      const stockTop = document.createElement("div");
-      stockTop.className = "stockTopLine";
-
-      const name = document.createElement("div");
-      name.className = "stockName";
-      name.textContent = s.name ?? "Stock";
-      stockTop.appendChild(name);
-
-      const scoreChip = document.createElement("div");
-      scoreChip.className = "scoreChip";
-      const scoreStr = typeof s.score === "number" ? s.score.toFixed(3) : String(s.score ?? "");
-      scoreChip.textContent = `Score ${scoreStr}`;
-      stockTop.appendChild(scoreChip);
-
-      if (s.tier) {
-        const tierChip = document.createElement("div");
-        tierChip.className = "tierChip";
-        tierChip.textContent = s.tier;
-        stockTop.appendChild(tierChip);
+      const key = `${s.name ?? ""}|${s.symbol ?? ""}`;
+      if (!stockMap.has(key)) {
+        stockMap.set(key, {
+          stock: s,
+          themes: new Set(),
+          tags: new Set(),
+        });
       }
-
-      row.appendChild(stockTop);
-
-      const breakdown = s.scoreBreakdown ?? {};
-      const themeRel = Number(breakdown.themeRelevance ?? 0);
-      const scorePct = Math.max(0, Math.min(1, Number(s.score ?? 0)));
-
-      const barLabel = document.createElement("div");
-      barLabel.className = "scoreBarLabelRow";
-      barLabel.innerHTML = `<span>Theme match</span><span>${fmt01(themeRel)}</span>`;
-      row.appendChild(barLabel);
-
-      const barWrap = document.createElement("div");
-      barWrap.className = "scoreBarWrap";
-      const bar = document.createElement("div");
-      bar.className = "scoreBar";
-      const fill = document.createElement("div");
-      fill.className = "scoreBarFill";
-      fill.style.width = `${Math.round(scorePct * 100)}%`;
-      bar.appendChild(fill);
-      barWrap.appendChild(bar);
-      row.appendChild(barWrap);
-
-      const grid = document.createElement("div");
-      grid.className = "breakdownGrid";
-      const bdItems = [
-        ["Theme relevance", fmt01(breakdown.themeRelevance ?? 0)],
-        ["Growth factor", fmt01(breakdown.growthFactor ?? 0)],
-        ["Momentum factor", fmt01(breakdown.momentumFactor ?? 0)],
-        ["Durability factor", fmt01(breakdown.durabilityFactor ?? 0)],
-        ["Valuation factor", fmt01(breakdown.valuationFactor ?? 0)],
-        ["Participation factor", fmt01(breakdown.participationFactor ?? 0)],
-        ["Revenue growth", fmt01(breakdown.revenueGrowthScore ?? 0)],
-        ["EPS growth", fmt01(breakdown.epsGrowthScore ?? 0)],
-        ["Debt score", fmt01(breakdown.debtScore ?? 0)],
-        ["Piotroski", fmt01(breakdown.piotroskiScore ?? 0)],
-        ["Momentum score", fmt01(breakdown.momentumScore ?? 0)],
-        ["Institutional", fmt01(breakdown.institutionalScore ?? 0)],
-        ["Acceleration", fmt01(breakdown.accelerationScore ?? 0)],
-        ["Breakout", fmt01(breakdown.breakoutScore ?? 0)],
-      ];
-      for (const [k, v] of bdItems) {
-        const item = document.createElement("div");
-        item.className = "breakdownItem";
-        item.innerHTML = `${k}: <span class="breakdownValue">${v}</span>`;
-        grid.appendChild(item);
+      const entry = stockMap.get(key);
+      entry.themes.add(themeLabel);
+      if (s.sector) entry.tags.add(s.sector);
+      if (s.subSector) entry.tags.add(s.subSector);
+      if (!entry.stock.score || Number(s.score ?? 0) > Number(entry.stock.score ?? 0)) {
+        entry.stock = s; // keep best-confidence projection
       }
-      row.appendChild(grid);
+    }
+  }
 
-      if (typeof breakdown.baseScore === "number") {
-        const detail = document.createElement("div");
-        detail.className = "reasonItem";
-        const mult = Number(breakdown.themeStrengthMultiplier ?? 1).toFixed(2);
-        const elite = Number(breakdown.eliteBoost ?? 0).toFixed(2);
-        const raw = Number(breakdown.rawCompositeScore ?? 0).toFixed(3);
-        detail.textContent = `Score build: base ${breakdown.baseScore.toFixed(3)} × themeStrength ${mult} + elite ${elite} => raw ${raw}`;
-        detail.style.marginTop = "6px";
-        row.appendChild(detail);
-      }
+  const convictionRank = { HIGH: 3, MEDIUM: 2, LOW: 1 };
+  const flattened = Array.from(stockMap.values())
+    .map((x) => ({
+      ...x.stock,
+      _themes: Array.from(x.themes),
+      _tags: Array.from(x.tags),
+    }))
+    .sort((a, b) => {
+      const c = (convictionRank[b.conviction] || 0) - (convictionRank[a.conviction] || 0);
+      if (c !== 0) return c;
+      return Number(b.score ?? 0) - Number(a.score ?? 0);
+    });
 
-      if (s.whyNow) {
-        const why = document.createElement("div");
-        why.className = "reasonItem";
-        why.textContent = `Why now: ${s.whyNow}`;
-        why.style.marginTop = "8px";
-        row.appendChild(why);
-      }
+  for (const s of flattened) {
+    const row = document.createElement("div");
+    row.className = "card";
 
-      const signals = Array.isArray(s.signals) ? s.signals.filter(Boolean) : [];
-      if (signals.length) {
-        const signalRow = document.createElement("div");
-        signalRow.className = "signalRow";
-        for (const sig of signals) {
-          const badge = document.createElement("div");
-          badge.className = "signalBadge";
-          const map = {
-            "Breakout Candidate": "🚀 Breakout Candidate",
-            "High Growth": "📈 High Growth",
-            "Institutional Buying": "🏦 Institutional Buying",
-          };
-          badge.textContent = map[sig] ?? sig;
-          signalRow.appendChild(badge);
-        }
-        row.appendChild(signalRow);
-      }
+    const stockTop = document.createElement("div");
+    stockTop.className = "stockTopLine";
 
-      const reasons = Array.isArray(s.reason) ? s.reason.filter(Boolean) : [];
-      if (reasons.length) {
-        const reasonList = document.createElement("div");
-        reasonList.className = "reasonList";
+    const name = document.createElement("div");
+    name.className = "stockName";
+    name.textContent = s.symbol ? `${s.name ?? "Stock"} (${s.symbol})` : (s.name ?? "Stock");
+    stockTop.appendChild(name);
 
-        const r1 = document.createElement("div");
-        r1.className = "reasonItem";
-        r1.textContent = `Theme: ${reasons[0] ?? ""}`;
-        reasonList.appendChild(r1);
+    const scoreChip = document.createElement("div");
+    scoreChip.className = "scoreChip";
+    const scoreStr = typeof s.score === "number" ? s.score.toFixed(3) : String(s.score ?? "");
+    scoreChip.textContent = `Score ${scoreStr}`;
+    stockTop.appendChild(scoreChip);
 
-        if (reasons[1]) {
-          const r2 = document.createElement("div");
-          r2.className = "reasonItem";
-          r2.textContent = `Metric: ${reasons[1] ?? ""}`;
-          reasonList.appendChild(r2);
-        }
-
-        row.appendChild(reasonList);
-      }
-
-      const profile = Array.isArray(s.strengthProfile) ? s.strengthProfile.filter(Boolean) : [];
-      if (profile.length) {
-        const profileBlock = document.createElement("div");
-        profileBlock.className = "reasonList";
-        const head = document.createElement("div");
-        head.className = "reasonItem";
-        head.textContent = "Strength profile:";
-        profileBlock.appendChild(head);
-        for (const p of profile.slice(0, 4)) {
-          const it = document.createElement("div");
-          it.className = "reasonItem";
-          it.textContent = `- ${p}`;
-          profileBlock.appendChild(it);
-        }
-        row.appendChild(profileBlock);
-      }
-
-      const risks = Array.isArray(s.riskFlags) ? s.riskFlags.filter(Boolean) : [];
-      if (risks.length) {
-        const riskBlock = document.createElement("div");
-        riskBlock.className = "reasonList";
-        const head = document.createElement("div");
-        head.className = "reasonItem";
-        head.textContent = "Risk flags:";
-        riskBlock.appendChild(head);
-        for (const rf of risks.slice(0, 4)) {
-          const it = document.createElement("div");
-          it.className = "reasonItem";
-          it.textContent = `- ${rf}`;
-          riskBlock.appendChild(it);
-        }
-        row.appendChild(riskBlock);
-      }
-
-      stockList.appendChild(row);
+    if (s.tier) {
+      const tierChip = document.createElement("div");
+      tierChip.className = "tierChip";
+      tierChip.textContent = `${s.conviction ?? "LOW"} • ${s.tier}`;
+      stockTop.appendChild(tierChip);
     }
 
-    card.appendChild(stockList);
-    list.appendChild(card);
+    row.appendChild(stockTop);
+
+    const tagWrap = document.createElement("div");
+    tagWrap.className = "chips";
+    for (const t of (s._themes || []).slice(0, 4)) {
+      const chip = document.createElement("div");
+      chip.className = "chip";
+      chip.textContent = `Theme: ${t}`;
+      tagWrap.appendChild(chip);
+    }
+    for (const tag of (s._tags || []).slice(0, 3)) {
+      const chip = document.createElement("div");
+      chip.className = "chip";
+      chip.textContent = `Sector: ${tag}`;
+      tagWrap.appendChild(chip);
+    }
+    row.appendChild(tagWrap);
+
+    const breakdown = s.scoreBreakdown ?? {};
+    const scorePct = Math.max(0, Math.min(1, Number(s.score ?? 0)));
+
+    const barLabel = document.createElement("div");
+    barLabel.className = "scoreBarLabelRow";
+    barLabel.innerHTML = `<span>Overall score</span><span>${fmt01(scorePct)}</span>`;
+    row.appendChild(barLabel);
+
+    const barWrap = document.createElement("div");
+    barWrap.className = "scoreBarWrap";
+    const bar = document.createElement("div");
+    bar.className = "scoreBar";
+    const fill = document.createElement("div");
+    fill.className = "scoreBarFill";
+    fill.style.width = `${Math.round(scorePct * 100)}%`;
+    bar.appendChild(fill);
+    barWrap.appendChild(bar);
+    row.appendChild(barWrap);
+
+    const grid = document.createElement("div");
+    grid.className = "breakdownGrid";
+    const bdItems = [
+      ["Theme relevance", fmt01(breakdown.themeRelevance ?? 0)],
+      ["Growth factor", fmt01(breakdown.growthFactor ?? 0)],
+      ["Momentum factor", fmt01(breakdown.momentumFactor ?? 0)],
+      ["Durability factor", fmt01(breakdown.durabilityFactor ?? 0)],
+      ["Valuation factor", fmt01(breakdown.valuationFactor ?? 0)],
+      ["Participation factor", fmt01(breakdown.participationFactor ?? 0)],
+      ["Revenue growth", fmt01(breakdown.revenueGrowthScore ?? 0)],
+      ["EPS growth", fmt01(breakdown.epsGrowthScore ?? 0)],
+      ["Debt score", fmt01(breakdown.debtScore ?? 0)],
+      ["Piotroski", fmt01(breakdown.piotroskiScore ?? 0)],
+      ["Momentum score", fmt01(breakdown.momentumScore ?? 0)],
+      ["Institutional", fmt01(breakdown.institutionalScore ?? 0)],
+      ["Acceleration", fmt01(breakdown.accelerationScore ?? 0)],
+      ["Breakout", fmt01(breakdown.breakoutScore ?? 0)],
+      ["Raw Revenue input", String(breakdown.rawRevenueGrowth ?? "-")],
+      ["Raw EPS input", String(breakdown.rawEpsGrowth ?? "-")],
+      ["Raw Debt/Equity input", String(breakdown.rawDebtToEquity ?? "-")],
+      ["Raw Piotroski input", String(breakdown.rawPiotroski ?? "-")],
+      ["Raw Momentum input", String(breakdown.rawMomentum ?? "-")],
+      ["Raw Institutional input", String(breakdown.rawInstitutional ?? "-")],
+    ];
+    for (const [k, v] of bdItems) {
+      const item = document.createElement("div");
+      item.className = "breakdownItem";
+      item.innerHTML = `${k}: <span class="breakdownValue">${v}</span>`;
+      grid.appendChild(item);
+    }
+    row.appendChild(grid);
+
+    if (typeof breakdown.baseScore === "number") {
+      const detail = document.createElement("div");
+      detail.className = "reasonItem";
+      const mult = Number(breakdown.themeStrengthMultiplier ?? 1).toFixed(2);
+      const elite = Number(breakdown.eliteBoost ?? 0).toFixed(2);
+      const raw = Number(breakdown.rawCompositeScore ?? 0).toFixed(3);
+      detail.textContent = `Score build: base ${breakdown.baseScore.toFixed(3)} × themeStrength ${mult} + elite ${elite} => raw ${raw}`;
+      detail.style.marginTop = "6px";
+      row.appendChild(detail);
+    }
+
+    if (s.whyNow) {
+      const why = document.createElement("div");
+      why.className = "reasonItem";
+      why.textContent = `Why now: ${s.whyNow}`;
+      why.style.marginTop = "8px";
+      row.appendChild(why);
+    }
+
+    const signals = Array.isArray(s.signals) ? s.signals.filter(Boolean) : [];
+    if (signals.length) {
+      const signalRow = document.createElement("div");
+      signalRow.className = "signalRow";
+      for (const sig of signals) {
+        const badge = document.createElement("div");
+        badge.className = "signalBadge";
+        const map = {
+          "Breakout Candidate": "🚀 Breakout Candidate",
+          "High Growth": "📈 High Growth",
+          "Institutional Buying": "🏦 Institutional Buying",
+        };
+        badge.textContent = map[sig] ?? sig;
+        signalRow.appendChild(badge);
+      }
+      row.appendChild(signalRow);
+    }
+
+    const reasons = Array.isArray(s.reason) ? s.reason.filter(Boolean) : [];
+    if (reasons.length) {
+      const reasonList = document.createElement("div");
+      reasonList.className = "reasonList";
+
+      const r1 = document.createElement("div");
+      r1.className = "reasonItem";
+      r1.textContent = `Theme: ${reasons[0] ?? ""}`;
+      reasonList.appendChild(r1);
+
+      if (reasons[1]) {
+        const r2 = document.createElement("div");
+        r2.className = "reasonItem";
+        r2.textContent = `Metric: ${reasons[1] ?? ""}`;
+        reasonList.appendChild(r2);
+      }
+
+      row.appendChild(reasonList);
+    }
+
+    const profile = Array.isArray(s.strengthProfile) ? s.strengthProfile.filter(Boolean) : [];
+    if (profile.length) {
+      const profileBlock = document.createElement("div");
+      profileBlock.className = "reasonList";
+      const head = document.createElement("div");
+      head.className = "reasonItem";
+      head.textContent = "Strength profile:";
+      profileBlock.appendChild(head);
+      for (const p of profile.slice(0, 4)) {
+        const it = document.createElement("div");
+        it.className = "reasonItem";
+        it.textContent = `- ${p}`;
+        profileBlock.appendChild(it);
+      }
+      row.appendChild(profileBlock);
+    }
+
+    const risks = Array.isArray(s.riskFlags) ? s.riskFlags.filter(Boolean) : [];
+    if (risks.length) {
+      const riskBlock = document.createElement("div");
+      riskBlock.className = "reasonList";
+      const head = document.createElement("div");
+      head.className = "reasonItem";
+      head.textContent = "Risk flags:";
+      riskBlock.appendChild(head);
+      for (const rf of risks.slice(0, 4)) {
+        const it = document.createElement("div");
+        it.className = "reasonItem";
+        it.textContent = `- ${rf}`;
+        riskBlock.appendChild(it);
+      }
+      row.appendChild(riskBlock);
+    }
+
+    list.appendChild(row);
   }
 }
 
-async function fetchJson(path) {
+async function fetchJson(path, options = {}) {
+  const timeoutMs = Number(options.timeoutMs ?? 30000);
+  const forceRefresh = options.forceRefresh === true;
   const endpoint = new URL(path, window.location.origin);
   if (activeNarrativeSources.length) {
     endpoint.searchParams.set("sources", activeNarrativeSources.join(","));
   }
-  const res = await fetch(endpoint.toString(), { method: "GET" });
+  if (activeNarrativeUrls.length) {
+    endpoint.searchParams.set("sourceUrls", activeNarrativeUrls.join("\n"));
+  }
+  if (forceRefresh) {
+    endpoint.searchParams.set("refresh", "1");
+    endpoint.searchParams.set("_t", String(Date.now()));
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let res;
+  try {
+    res = await fetch(endpoint.toString(), { method: "GET", signal: controller.signal });
+  } catch (err) {
+    if (err && err.name === "AbortError") {
+      throw new Error(`Request timed out after ${Math.round(timeoutMs / 1000)}s`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(`Request failed (${res.status}). ${text}`.trim());
@@ -727,8 +806,10 @@ function parseNarrativeSourcesInput(raw) {
     .split(/[,\n]/g)
     .map((s) => s.trim())
     .filter(Boolean);
-  const out = [];
-  const seen = new Set();
+  const domains = [];
+  const urls = [];
+  const seenDomains = new Set();
+  const seenUrls = new Set();
   const toDomain = (value) => {
     const v = value.trim();
     if (!v) return "";
@@ -740,13 +821,29 @@ function parseNarrativeSourcesInput(raw) {
     }
   };
   for (const p of parts) {
-    const d = toDomain(p);
-    if (!d || seen.has(d)) continue;
-    seen.add(d);
-    out.push(d);
-    if (out.length >= 7) break;
+    const token = p.trim();
+    const isUrl = /^https?:\/\//i.test(token);
+    if (isUrl) {
+      try {
+        const u = new URL(token);
+        u.hash = ""; // UI fragments like #zoom are local-only and should not affect backend fetch.
+        const normalizedUrl = u.toString();
+        if (!seenUrls.has(normalizedUrl) && urls.length < 7) {
+          seenUrls.add(normalizedUrl);
+          urls.push(normalizedUrl);
+        }
+      } catch {
+        // ignore invalid URL
+      }
+    }
+
+    const d = toDomain(token);
+    if (!d || seenDomains.has(d)) continue;
+    seenDomains.add(d);
+    domains.push(d);
+    if (domains.length >= 7) break;
   }
-  return out;
+  return { domains, urls };
 }
 
 function renderParseDiagnostics(diag) {
@@ -777,27 +874,46 @@ function renderParseDiagnostics(diag) {
   box.hidden = false;
 }
 
-async function loadThemes() {
+async function loadThemes(options = {}) {
   const status = $("trendsStatus");
+  const requestId = ++latestThemesRequestId;
   showStatus(status, "Loading themes...", null);
   try {
-    const data = await fetchJson("/trends");
+    const data = await fetchJson("/trends", options);
+    if (requestId !== latestThemesRequestId) return;
     const themes = data.themes ?? data.trends ?? data.items ?? [];
     renderThemes(themes);
     status.textContent = "";
   } catch (e) {
+    if (requestId !== latestThemesRequestId) return;
     showStatus(status, `Failed to load themes: ${e.message || e}`, "error");
   }
 }
 
-async function loadRecommendations() {
+async function loadRecommendations(options = {}) {
   const status = $("recsStatus");
+  const requestId = ++latestRecommendationsRequestId;
+  if (recommendationsProgressTicker) {
+    clearInterval(recommendationsProgressTicker);
+    recommendationsProgressTicker = null;
+  }
   showStatus(status, "Loading recommendations...", null);
+  recommendationsProgressTicker = setInterval(() => {
+    if (requestId !== latestRecommendationsRequestId) return;
+    showStatus(status, "Still processing recommendations...", null);
+  }, 4000);
   try {
-    const data = await fetchJson("/recommendations");
+    const data = await fetchJson("/recommendations", { timeoutMs: 45000, forceRefresh: options.forceRefresh === true });
+    if (requestId !== latestRecommendationsRequestId) return;
     const themesRanked = data.themes ?? data.recommendations ?? data.items ?? [];
-    if (!themesRanked.length && !hasSubmittedStocks) {
+    const reason = (data?.meta?.reason ?? "").toString().toUpperCase();
+    if (!themesRanked.length && (reason === "NO_STOCKS" || !hasSubmittedStocks)) {
       showStatus(status, "Paste stock data to generate recommendations.", null);
+      renderRecommendations([]);
+      return;
+    }
+    if (!themesRanked.length && reason === "NO_MATCHES") {
+      showStatus(status, "No strong matches found for current themes and stock universe.", null);
       renderRecommendations([]);
       return;
     }
@@ -805,7 +921,13 @@ async function loadRecommendations() {
     renderRecommendations(themesRanked);
     status.textContent = "";
   } catch (e) {
+    if (requestId !== latestRecommendationsRequestId) return;
     showStatus(status, `Failed to load recommendations: ${e.message || e}`, "error");
+  } finally {
+    if (requestId === latestRecommendationsRequestId && recommendationsProgressTicker) {
+      clearInterval(recommendationsProgressTicker);
+      recommendationsProgressTicker = null;
+    }
   }
 }
 
@@ -813,19 +935,28 @@ async function runCombinedAnalysis() {
   const status = $("trendsStatus");
   const input = $("narrativeSourcesInput");
   const parsed = parseNarrativeSourcesInput(input ? input.value : "");
-  activeNarrativeSources = parsed;
+  activeNarrativeSources = parsed.domains;
+  activeNarrativeUrls = parsed.urls;
   showStatus(
     status,
-    parsed.length
-      ? `Running analysis with ${parsed.length} custom narrative source(s)...`
+    parsed.domains.length || parsed.urls.length
+      ? `Running analysis with ${parsed.domains.length} domain source(s) and ${parsed.urls.length} exact URL source(s)...`
       : "Running analysis with default narrative sources...",
     null
   );
-  await loadThemes();
-  await loadRecommendations();
+  await loadThemes({ forceRefresh: true });
+  await loadRecommendations({ forceRefresh: true });
 }
 
-async function submitStocks() {
+function prepopulateDefaultNarrativeSources() {
+  const input = $("narrativeSourcesInput");
+  if (!input) return;
+  input.value = DEFAULT_NARRATIVE_SOURCES.join("\n");
+  activeNarrativeSources = [...DEFAULT_NARRATIVE_SOURCES];
+}
+
+async function submitStocks(options = {}) {
+  const replaceExisting = options.replaceExisting !== false;
   const status = $("stocksStatus");
   const input = $("stocksInput").value;
   status.textContent = "";
@@ -849,10 +980,10 @@ async function submitStocks() {
       showStatus(status, "Nothing to submit. Paste JSON with at least one stock.", "error");
       return;
     }
-    payload = { stocks };
+    payload = { stocks, replace: replaceExisting };
   } else {
     // For CSV/TSV uploads and Excel pastes, let backend parser handle quotes/large files.
-    payload = { csv: raw };
+    payload = { csv: raw, replace: replaceExisting };
   }
 
   try {
@@ -873,7 +1004,12 @@ async function submitStocks() {
     hasSubmittedStocks = true;
     const accepted = Number(data?.received ?? 0);
     const rejected = Number(data?.rejected ?? 0);
-    showStatus(status, `Stocks saved (${accepted} accepted, ${rejected} rejected). Refreshing recommendations...`, null);
+    const modeLabel = data?.mode === "merge" ? "merged" : "replaced";
+    showStatus(
+      status,
+      `Stocks ${modeLabel} (${accepted} accepted, ${rejected} rejected). Refreshing recommendations...`,
+      null
+    );
     await loadThemes();
     await loadRecommendations();
   } catch (e) {
@@ -892,8 +1028,14 @@ async function loadCsvFromFile() {
 
   try {
     const text = await file.text();
+    const lineCount = text
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean).length;
     $("stocksInput").value = text;
-    showStatus(status, `Loaded ${file.name}. Click Submit to recompute recommendations.`, null);
+    renderParseDiagnostics(null);
+    showStatus(status, `Loaded ${file.name} (${lineCount} non-empty lines). Starting processing...`, null);
+    await submitStocks({ replaceExisting: true });
   } catch (e) {
     showStatus(status, `Failed to read file: ${e.message || e}`, "error");
   }
@@ -903,7 +1045,9 @@ document.addEventListener("DOMContentLoaded", () => {
   $("submitStocks").addEventListener("click", submitStocks);
   $("loadCsvFile").addEventListener("click", loadCsvFromFile);
   $("runCombinedAnalysis").addEventListener("click", runCombinedAnalysis);
+  prepopulateDefaultNarrativeSources();
+  // On first load, compute themes only. Recommendations will run
+  // after the user uploads/submits stocks or explicitly runs analysis.
   loadThemes();
-  loadRecommendations();
 });
 

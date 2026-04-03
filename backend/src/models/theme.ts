@@ -5,5 +5,9 @@ export type Theme = {
   drivers?: string[];
   rationale?: string;
   strength?: number;
+  marketScore?: number;
+  narrativeScore?: number;
+  overlapBoost?: number;
+  sourceEvidenceCount?: number;
 };
 

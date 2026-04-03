@@ -51,7 +51,6 @@ With:
 - Composite stock scoring using growth, momentum, ownership, valuation, and acceleration
 - Clear "why now", conviction, tier, and signal outputs
 - Web UI for fast experimentation with JSON/CSV/Excel-style pasted data
-- Chrome extension popup (local backend mode) for lightweight monitoring
 
 ## Financial Interpretation Layer
 
@@ -81,10 +80,6 @@ This allows Sentinel to reason about businesses, not just calculate scores.
 - Single-page local interface served by backend
 - Rich stock ingestion parser (JSON, CSV, TSV, pasted tables)
 
-### Browser Extension (`extension/`)
-- Manifest V3
-- Popup UI calling `http://localhost:3000`
-
 ## How It Works (User Flow)
 
 1. Sentinel fetches macro data (or fallback themes if APIs are not configured).
@@ -103,9 +98,9 @@ This allows Sentinel to reason about businesses, not just calculate scores.
 - `GET /recommendations` - ranked recommendations by theme
 - `POST /stocks` - ingest stock payload (JSON/CSV/text)
 
-## Local Setup
+## Run Locally
 
-### 1) Clone and install backend deps
+### 1) Clone and install backend dependencies
 
 ```bash
 git clone https://github.com/somthebuilder/Sentinel_Finance.git
@@ -120,22 +115,34 @@ cp .env.example .env
 ```
 
 Set values in `backend/.env`:
-- `TRAVILY_BASE_URL`
-- `TRAVILY_API_KEY`
-- `TRAVILY_TIMEOUT_MS`
-- `TRAVILY_INCLUDE_DOMAINS`
+- `TAVILY_BASE_URL`
+- `TAVILY_API_KEY`
+- `TAVILY_TIMEOUT_MS`
+- `TAVILY_INCLUDE_DOMAINS`
 - `OPENAI_API_KEY` (optional)
 - `OPENAI_MODEL` (optional, default available in example)
 - `PORT`
 
-### 3) Build and run
+### 3) Start in development mode (recommended)
 
 ```bash
+cd backend
+npm run dev
+```
+
+Open:
+- App UI: [http://localhost:3000](http://localhost:3000)
+- Health check: [http://localhost:3000/health](http://localhost:3000/health)
+
+### 4) Production-style run (optional)
+
+```bash
+cd backend
 npm run build
 npm run start
 ```
 
-Open: [http://localhost:3000](http://localhost:3000)
+The web app is served by the backend from `webapp/` at the same URL.
 
 ## Input Format (Minimum)
 

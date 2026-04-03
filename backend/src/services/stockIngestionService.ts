@@ -153,17 +153,7 @@ export function parseCsvToStockInputsWithDiagnostics(csv: string): {
     };
   }
 
-  const pickDelimiter = (line: string) => {
-    const tabs = (line.match(/\t/g) ?? []).length;
-    const commas = (line.match(/,/g) ?? []).length;
-    const semis = (line.match(/;/g) ?? []).length;
-    if (tabs >= 2) return "\t";
-    if (commas >= 2) return ",";
-    if (semis >= 2) return ";";
-    return ",";
-  };
-
-  const delimiter = pickDelimiter(lines[0]) as "," | ";" | "\t";
+  const delimiters: Array<"," | ";" | "\t"> = [",", ";", "\t"];
   const splitQuoted = (line: string, delim: string): string[] => {
     if (delim === "\t") return line.split("\t").map((c) => c.trim());
     const out: string[] = [];
@@ -191,14 +181,33 @@ export function parseCsvToStockInputsWithDiagnostics(csv: string): {
     return out;
   };
 
+  const pickDelimiter = (line: string): "," | ";" | "\t" => {
+    const tabs = (line.match(/\t/g) ?? []).length;
+    const commas = (line.match(/,/g) ?? []).length;
+    const semis = (line.match(/;/g) ?? []).length;
+    if (tabs >= 2) return "\t";
+    if (commas >= 2) return ",";
+    if (semis >= 2) return ";";
+    return ",";
+  };
+
   let headerLineIdx = 0;
+  let delimiter: "," | ";" | "\t" = pickDelimiter(lines[0]);
+  let bestScore = -1;
   const scanLimit = Math.min(lines.length, 8);
   for (let i = 0; i < scanLimit; i++) {
-    const probe = splitQuoted(lines[i], delimiter);
-    const probeIdx = buildCanonicalHeaderIndex(probe);
-    if (probeIdx.name !== undefined) {
-      headerLineIdx = i;
-      break;
+    for (const delim of delimiters) {
+      const probe = splitQuoted(lines[i], delim);
+      if (probe.length < 2) continue;
+      const probeIdx = buildCanonicalHeaderIndex(probe);
+      const canonicalCount = Object.keys(probeIdx).length;
+      const hasName = probeIdx.name !== undefined ? 1 : 0;
+      const score = canonicalCount + hasName * 5;
+      if (score > bestScore) {
+        bestScore = score;
+        headerLineIdx = i;
+        delimiter = delim;
+      }
     }
   }
 

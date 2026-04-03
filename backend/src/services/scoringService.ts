@@ -31,10 +31,19 @@ export type ScoreBreakdown = {
   themeStrengthMultiplier: number;
   eliteBoost: number;
   rawCompositeScore: number;
+  rawRevenueGrowth?: number;
+  rawEpsGrowth?: number;
+  rawDebtToEquity?: number;
+  rawPiotroski?: number;
+  rawMomentum?: number;
+  rawInstitutional?: number;
 };
 
 export type StockRecommendation = {
   name: string;
+  symbol?: string;
+  sector?: string;
+  subSector?: string;
   score: number;
   conviction: "HIGH" | "MEDIUM" | "LOW";
   tier: "A+ (High Growth)" | "A (Strong)" | "B (Watchlist)" | "C (Ignore)";
@@ -182,6 +191,8 @@ function buildWhyNow(stock: Stock, theme: Theme): string {
 
 export async function rankStocksByTheme(themes: Theme[], stocks: Stock[]): Promise<RankedByTheme[]> {
   const topN = 5;
+  const enableReasonPolish = String(process.env.ENABLE_REASON_POLISH ?? "false").toLowerCase() === "true";
+  const maxPolishPerTheme = Number(process.env.MAX_REASON_POLISH_PER_THEME ?? "2");
 
   const ranked: RankedByTheme[] = [];
   for (const theme of themes) {
@@ -190,7 +201,7 @@ export async function rankStocksByTheme(themes: Theme[], stocks: Stock[]): Promi
 
     const scored = stocks
       .filter(passesGrowthFilter)
-      .map((stock) => {
+      .map((stock): StockRecommendation | null => {
         const details = calculateThemeRelevanceDetails(stock, theme);
 
         // Deterministic match gate with token-aware overlap from themeService.
@@ -224,6 +235,9 @@ export async function rankStocksByTheme(themes: Theme[], stocks: Stock[]): Promi
 
         return {
           name: stock.name,
+          symbol: stock.symbol,
+          sector: stock.sector,
+          subSector: stock.subSector,
           score,
           conviction: convictionForScore(score),
           tier: getTier(score),
@@ -250,21 +264,33 @@ export async function rankStocksByTheme(themes: Theme[], stocks: Stock[]): Promi
             themeStrengthMultiplier: Number(themeStrengthMultiplier.toFixed(6)),
             eliteBoost: Number(eliteBoost.toFixed(6)),
             rawCompositeScore: Number(rawComposite.toFixed(6)),
+            rawRevenueGrowth: Number(stock.revenueGrowth ?? 0),
+            rawEpsGrowth: Number(stock.epsGrowth ?? stock.netProfitYoYGrowth ?? 0),
+            rawDebtToEquity: Number(stock.debtToEquity ?? stock.ltDebtToEquity ?? 0),
+            rawPiotroski: Number(stock.piotroski ?? 0),
+            rawMomentum: Number(stock.momentumScore ?? 0),
+            rawInstitutional: Number(stock.institutionalOwnership ?? stock.institutionalActivity ?? 0),
           },
           reasons,
           reason: reasons,
-        } satisfies StockRecommendation;
+        };
       })
       .filter((x): x is StockRecommendation => x !== null);
 
     const topStocks = scored.sort((a, b) => b.score - a.score).slice(0, topN);
 
     if (topStocks.length) {
-      // Optional AI polish only for top 3.
-      for (let i = 0; i < topStocks.length; i++) {
-        const polished = await polishReasonsIfNeeded(topStocks[i].reasons, i + 1);
-        topStocks[i].reasons = polished;
-        topStocks[i].reason = polished;
+      // Optional AI polish is disabled by default to keep recommendations fast/stable.
+      // When enabled, polish only a small top slice in parallel.
+      if (enableReasonPolish && maxPolishPerTheme > 0) {
+        const toPolish = topStocks.slice(0, Math.min(maxPolishPerTheme, topStocks.length));
+        const polishedBatch = await Promise.all(
+          toPolish.map((s, idx) => polishReasonsIfNeeded(s.reasons, idx + 1).catch(() => s.reasons))
+        );
+        for (let i = 0; i < toPolish.length; i++) {
+          topStocks[i].reasons = polishedBatch[i];
+          topStocks[i].reason = polishedBatch[i];
+        }
       }
 
       ranked.push({

@@ -40,6 +40,12 @@ export function getStocks(): Stock[] {
   return stocks;
 }
 
+export function replaceStocks(incoming: Stock[]): Stock[] {
+  const normalized = incoming.map(normalizeStock).filter((s) => s.name.length > 0);
+  stocks = normalized;
+  return stocks;
+}
+
 export function addStocks(incoming: Stock[]): Stock[] {
   const normalized = incoming.map(normalizeStock).filter((s) => s.name.length > 0);
   if (!normalized.length) return stocks;
