@@ -4,33 +4,40 @@
   <img src="webapp/assets/logo.svg" alt="Sentinel logo" width="88" />
 </p>
 
-**Sentinel** maps **macro themes** to **high-growth Indian stocks** using deterministic scoring and a **financial interpretation layer** (growth, earnings, debt, quality—not raw numbers only).
+**Sentinel** maps **macro** and **sector/industry momentum** to **high-growth Indian stocks** using deterministic scoring and a **financial interpretation layer** (growth, earnings, debt, quality—not raw numbers only).
 
 It answers: **“What stocks are positioned to benefit from what is happening right now?”**
 
-**Pipeline:** narrative + market signals → themes → match stocks by sector/subsector + keywords → score and rank → explainable cards in the UI.
+**Pipeline:** macro inputs + Trendlyne industry tape → blended scores (momentum, breadth, relative strength, quality, macro alignment) → sector cards and ranks; optional Tavily narrative for theme copy. Stock flow: ingest screener-style data → themes → match by sector/keywords → score and rank.
 
 ---
 
-## Product preview
+## Demo
 
-### Themes (market + narrative)
+Screen recording of the app in use (macro & industry momentum, stock analysis, recommendations):
 
-Themes blend **market trend** text (indices / configured sources) with **your narrative sources** (domains or exact URLs). Each card shows strength, tags, and **signal mix** (market vs user narrative, overlap band, evidence count).
+<p align="center">
+  <video src="docs/assets/Sentinel.mp4" controls playsinline width="100%" style="max-width: 960px">
+    Your browser does not support embedded video.
+    <a href="docs/assets/Sentinel.mp4">Open the demo (MP4)</a>.
+  </video>
+</p>
 
-![Sentinel themes dashboard](docs/images/sentinel-themes.png)
+<p align="center"><sub>File: <code>docs/assets/Sentinel.mp4</code> — same asset ships in this repo for offline viewing.</sub></p>
 
-### Analyze stocks
+---
 
-Paste JSON, CSV/TSV, or an Excel table, or **Load CSV/TSV File**. Loading a file **replaces** the in-memory universe. **Analyze stocks** submits to the API and refreshes themes and recommendations.
+## What you get
 
-![Sentinel analyze stocks section](docs/images/sentinel-analyze-stocks.png)
+### Macro & industry momentum
 
-### Recommendations
+- **Trendlyne** (server-side JSON) drives weekly industry % change, breadth, and sector structure.
+- **Macro dials** (rates, inflation, yields, growth) combine with a regime/sector map for alignment; optional **Tavily** auto-fills macro from research (rate-limited; manual mode always works).
+- **Sector cards**: top industries per sector, participation lines, BUY / Watch / Avoid style labels, optional narrative keywords from your domains/URLs.
 
-Ranked **stock cards**: conviction/tier, theme and sector chips, factor breakdown (1–5-style bands), raw inputs where available, and **why now** rationale.
+### Analyze stocks & recommendations
 
-![Sentinel recommendation cards](docs/images/sentinel-recommendations.png)
+Paste JSON, CSV/TSV, or **Load CSV/TSV File** (replaces the in-memory universe). **Analyze stocks** runs ingest + scoring; **Recommendations** shows ranked cards with conviction, tier, factor bands, and rationale.
 
 ---
 
@@ -38,18 +45,19 @@ Ranked **stock cards**: conviction/tier, theme and sector chips, factor breakdow
 
 | Typical tools | Sentinel |
 |---------------|----------|
-| “What looks good on a screen?” | “What fits **today’s** macro themes?” |
+| “What looks good on a screen?” | “What fits **today’s** macro and sector flow?” |
 | Opaque ranks | Deterministic rules + visible breakdowns |
 
 ---
 
 ## Core features
 
-- Dynamic themes from Indian finance sources (optional Tavily/OpenAI; fallbacks if keys are missing)
-- Theme ↔ stock matching: sector / subSector + keyword overlap; relevance thresholding
-- **Financial interpretation layer:** classifies revenue/EPS growth, debt risk, Piotroski, momentum, institutional activity
-- Composite scoring: growth, momentum, participation, valuation, acceleration
-- Web UI: paste or upload screener-style data
+- Industry intelligence API (`GET /industry-intelligence`) blending momentum, breadth, relative strength, quality, and macro alignment (see `docs/MACRO_AND_INDUSTRY_LOGIC.md`).
+- Dynamic themes from Indian finance sources (optional Tavily/OpenAI; fallbacks if keys are missing).
+- Theme ↔ stock matching: sector / subSector + keyword overlap; relevance thresholding.
+- **Financial interpretation layer:** classifies revenue/EPS growth, debt risk, Piotroski, momentum, institutional activity.
+- Composite stock scoring: growth, momentum, participation, valuation, acceleration.
+- Web UI: static `webapp/`, served by the backend.
 
 ### Financial interpretation layer
 
@@ -62,10 +70,10 @@ Rules turn metrics into signals (e.g. weak / good / excellent growth, balance-sh
 | Area | Stack |
 |------|--------|
 | Backend | Node.js, Express 5, TypeScript, Zod |
-| Integrations | Optional Tavily (search), OpenAI (enrichment / polish) |
+| Integrations | Optional Tavily Research (macro + themes), OpenAI (enrichment / polish) |
 | Frontend | Static `webapp/` (HTML/CSS/JS), served by the backend |
 
-**API:** `GET /health`, `GET /trends` · `GET /themes`, `GET /recommendations`, `POST /stocks` (JSON or `csv` text with `replace: true` to overwrite the universe).
+**API (selected):** `GET /health`, `GET /industry-intelligence`, `GET /trends`, `GET /themes`, `GET /recommendations`, `GET /macro-from-tavily`, `POST /stocks` (JSON or `csv` text with `replace: true` to overwrite the universe).
 
 ---
 
@@ -78,7 +86,7 @@ git clone https://github.com/somthebuilder/Sentinel_Finance.git
 cd Sentinel_Finance/backend
 npm install
 cp .env.example .env
-# Edit .env — at minimum set TAVILY_API_KEY for richer themes; OPENAI_* optional
+# Edit .env — TAVILY_API_KEY optional for macro auto + richer themes; OPENAI_* optional
 npm run dev
 ```
 
@@ -86,8 +94,8 @@ Open **http://localhost:3000** (or your `PORT`). Production-style: `npm run buil
 
 ### Use the app
 
-1. **Themes** — Adjust narrative sources; **Run Combined Analysis** refreshes themes and recommendations. Read **signal mix** to see market vs your sources and overlap.
-2. **Analyze stocks** — Paste or upload; **Analyze stocks** runs ingest + scoring. Watch status under **Recommendations** for progress.
+1. **Macro & industry momentum** — Set narrative domains/URLs if you want Tavily theme context; choose Auto or Manual macro; **Refresh industry data** loads Trendlyne + merged narrative.
+2. **Analyze stocks** — Paste or upload; **Analyze stocks** runs ingest + scoring. Check status under **Recommendations**.
 3. **Recommendations** — If empty, check the parse report and that sectors/tags overlap active themes.
 
 **Data:** Works best with **Trendlyne-style** exports; other screeners may need interpreter tweaks (see disclaimer).
