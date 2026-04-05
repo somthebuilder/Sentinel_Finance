@@ -5,14 +5,30 @@ function $(id) {
 let hasSubmittedStocks = false;
 let activeNarrativeSources = [];
 let activeNarrativeUrls = [];
-let latestThemesRequestId = 0;
 let latestRecommendationsRequestId = 0;
 let recommendationsProgressTicker = null;
+/** Default narrative lines: domains + optional exact URLs. Trendlyne = reference for sector/industry weekly momentum (backend also fetches its JSON API). */
 const DEFAULT_NARRATIVE_SOURCES = [
+  "trendlyne.com",
+  "https://trendlyne.com/equity/sector-industry-analysis/overall/week-changeP/",
   "pulse.zerodha.com",
   "equitymaster.com",
   "moneycontrol.com",
 ];
+
+/** First-load default for Tavily macro “preferred domains” (session may override). */
+const DEFAULT_TAVILY_MACRO_DOMAINS_TEXT = [
+  "trendlyne.com",
+  "rbi.org.in",
+  "ibef.org",
+  "mospi.gov.in",
+].join("\n");
+
+/** v2: defaults include Trendlyne + macro reference domains */
+const TAVILY_MACRO_DOMAINS_KEY = "sentinel_tavily_macro_domains_v2";
+const TAVILY_MACRO_HINT_KEY = "sentinel_tavily_macro_hint_v1";
+let activeTavilyMacroDomains = [];
+let activeTavilyMacroDomainHint = "";
 
 function showStatus(el, msg, kind) {
   el.textContent = msg;
@@ -446,77 +462,6 @@ function parseJsonOrCsv(input) {
   return stocks;
 }
 
-function renderThemes(themes) {
-  const list = $("trendsList");
-  list.innerHTML = "";
-
-  if (!themes || !themes.length) {
-    const msg = document.createElement("div");
-    msg.className = "subtle";
-    msg.textContent = "No themes yet (Tavily drivers may be empty).";
-    list.appendChild(msg);
-    return;
-  }
-
-  for (const t of themes.slice(0, 10)) {
-    const card = document.createElement("div");
-    card.className = "card";
-
-    const topRow = document.createElement("div");
-    topRow.className = "cardTitleRow";
-
-    const title = document.createElement("div");
-    title.className = "themeTitle";
-    title.textContent = t.theme ?? "Theme";
-    topRow.appendChild(title);
-
-    const chips = document.createElement("div");
-    chips.className = "chips";
-    const kws = Array.isArray(t.keywords) ? t.keywords.slice(0, 6) : [];
-    for (const kw of kws) {
-      const chip = document.createElement("div");
-      chip.className = "chip";
-      chip.textContent = kw;
-      chips.appendChild(chip);
-    }
-
-    card.appendChild(topRow);
-    card.appendChild(chips);
-
-    const driver = Array.isArray(t.drivers) && t.drivers.length ? t.drivers[0] : "";
-    if (driver) {
-      const snippet = document.createElement("div");
-      snippet.className = "driverSnippet";
-      snippet.textContent = driver;
-      card.appendChild(snippet);
-    }
-
-    if (t.rationale) {
-      const rationale = document.createElement("div");
-      rationale.className = "driverSnippet";
-      // Keep rationale concise to avoid repetitive, verbose cards.
-      const strengthTxt = Number(t.strength ?? 0).toFixed(2);
-      rationale.textContent = `Rationale: strength ${strengthTxt} from blended macro + narrative signals.`;
-      card.appendChild(rationale);
-    }
-
-    if (typeof t.marketScore === "number" || typeof t.narrativeScore === "number") {
-      const explain = document.createElement("div");
-      explain.className = "driverSnippet";
-      const market = Number(t.marketScore ?? 0).toFixed(2);
-      const narrative = Number(t.narrativeScore ?? 0).toFixed(2);
-      const overlapNum = Number(t.overlapBoost ?? 0);
-      const overlap = overlapNum.toFixed(2);
-      const evidence = Number(t.sourceEvidenceCount ?? 0);
-      const overlapBand = overlapNum >= 0.14 ? "High" : overlapNum >= 0.07 ? "Med" : "Low";
-      explain.textContent = `Signal mix -> Market: ${market}, User: ${narrative}, Overlap: ${overlap} [${overlapBand}], Evidence: ${evidence}`;
-      card.appendChild(explain);
-    }
-
-    list.appendChild(card);
-  }
-}
-
 function renderRecommendations(themesRanked) {
   const list = $("recsList");
   list.innerHTML = "";
@@ -846,6 +791,66 @@ async function fetchJson(path, options = {}) {
   return res.json();
 }
 
+function parseTavilyMacroDomainsInput(raw) {
+  const parts = (raw ?? "")
+    .split(/[,\n]/g)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const out = [];
+  const seen = new Set();
+  for (const p of parts) {
+    try {
+      const u = p.includes("://") ? new URL(p) : new URL(`https://${p}`);
+      const host = u.hostname.replace(/^www\./, "").toLowerCase();
+      if (!host || seen.has(host)) continue;
+      seen.add(host);
+      out.push(host);
+      if (out.length >= 16) break;
+    } catch {
+      // skip invalid tokens
+    }
+  }
+  return out;
+}
+
+function syncTavilyMacroFromInput() {
+  const dEl = $("tavilyMacroDomainsInput");
+  const hEl = $("tavilyMacroDomainHint");
+  if (dEl) {
+    activeTavilyMacroDomains = parseTavilyMacroDomainsInput(dEl.value);
+    try {
+      sessionStorage.setItem(TAVILY_MACRO_DOMAINS_KEY, dEl.value);
+    } catch {
+      // ignore
+    }
+  }
+  if (hEl) {
+    activeTavilyMacroDomainHint = (hEl.value || "").trim().slice(0, 220);
+    try {
+      sessionStorage.setItem(TAVILY_MACRO_HINT_KEY, hEl.value || "");
+    } catch {
+      // ignore
+    }
+  }
+}
+
+function restoreTavilyMacroUi() {
+  const dEl = $("tavilyMacroDomainsInput");
+  const hEl = $("tavilyMacroDomainHint");
+  try {
+    const sd = sessionStorage.getItem(TAVILY_MACRO_DOMAINS_KEY);
+    const sh = sessionStorage.getItem(TAVILY_MACRO_HINT_KEY);
+    if (dEl) {
+      if (sd !== null) dEl.value = sd;
+      else dEl.value = DEFAULT_TAVILY_MACRO_DOMAINS_TEXT;
+    }
+    if (hEl && sh !== null) hEl.value = sh;
+  } catch {
+    if (dEl && !dEl.value) dEl.value = DEFAULT_TAVILY_MACRO_DOMAINS_TEXT;
+  }
+  syncTavilyMacroFromInput();
+}
+
 function parseNarrativeSourcesInput(raw) {
   const parts = (raw ?? "")
     .split(/[,\n]/g)
@@ -919,22 +924,6 @@ function renderParseDiagnostics(diag) {
   box.hidden = false;
 }
 
-async function loadThemes(options = {}) {
-  const status = $("trendsStatus");
-  const requestId = ++latestThemesRequestId;
-  showStatus(status, "Loading themes...", null);
-  try {
-    const data = await fetchJson("/trends", options);
-    if (requestId !== latestThemesRequestId) return;
-    const themes = data.themes ?? data.trends ?? data.items ?? [];
-    renderThemes(themes);
-    status.textContent = "";
-  } catch (e) {
-    if (requestId !== latestThemesRequestId) return;
-    showStatus(status, `Failed to load themes: ${e.message || e}`, "error");
-  }
-}
-
 async function loadRecommendations(options = {}) {
   const status = $("recsStatus");
   const requestId = ++latestRecommendationsRequestId;
@@ -976,32 +965,19 @@ async function loadRecommendations(options = {}) {
   }
 }
 
-async function runCombinedAnalysis() {
-  const status = $("trendsStatus");
+function syncNarrativeFromInput() {
   const input = $("narrativeSourcesInput");
-  const parsed = parseNarrativeSourcesInput(input ? input.value : "");
+  if (!input) return;
+  const parsed = parseNarrativeSourcesInput(input.value);
   activeNarrativeSources = parsed.domains;
   activeNarrativeUrls = parsed.urls;
-  showStatus(
-    status,
-    parsed.domains.length || parsed.urls.length
-      ? `Running analysis with ${parsed.domains.length} domain source(s) and ${parsed.urls.length} exact URL source(s)...`
-      : "Running analysis with default narrative sources...",
-    null
-  );
-  const recsStatusEl = $("recsStatus");
-  if (recsStatusEl) {
-    showStatus(recsStatusEl, "Updating themes for recommendations…", null);
-  }
-  await loadThemes({ forceRefresh: true });
-  await loadRecommendations({ forceRefresh: true });
 }
 
 function prepopulateDefaultNarrativeSources() {
   const input = $("narrativeSourcesInput");
   if (!input) return;
   input.value = DEFAULT_NARRATIVE_SOURCES.join("\n");
-  activeNarrativeSources = [...DEFAULT_NARRATIVE_SOURCES];
+  syncNarrativeFromInput();
 }
 
 async function submitStocks(options = {}) {
@@ -1059,11 +1035,11 @@ async function submitStocks(options = {}) {
       `Stocks ${modeLabel} (${accepted} accepted, ${rejected} rejected).`,
       null
     );
+    syncNarrativeFromInput();
     const recsStatusEl = $("recsStatus");
     if (recsStatusEl) {
-      showStatus(recsStatusEl, "Updating themes for recommendations…", null);
+      showStatus(recsStatusEl, "Updating recommendations…", null);
     }
-    await loadThemes();
     await loadRecommendations();
   } catch (e) {
     showStatus(status, `Failed to submit stocks: ${e.message || e}`, "error");
@@ -1094,13 +1070,643 @@ async function loadCsvFromFile() {
   }
 }
 
+const INDUSTRY_INTEL_SNAPSHOT_KEY = "sentinel_industry_intel_snapshot_v2";
+
+function readIndustrySnapshot() {
+  try {
+    const raw = sessionStorage.getItem(INDUSTRY_INTEL_SNAPSHOT_KEY);
+    if (!raw) return null;
+    const o = JSON.parse(raw);
+    if (o && o.v === 2 && o.ind && o.sec) return o;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function writeIndustrySnapshot(payload) {
+  const ind = {};
+  payload.top_industries.forEach((item, i) => {
+    ind[item.name] = { rank: i + 1, bucket: "top", classification: item.classification };
+  });
+  payload.avoid_list.forEach((item, i) => {
+    ind[item.name] = { rank: i + 1, bucket: "avoid", classification: item.classification };
+  });
+  const sec = {};
+  const sectors = payload.top_sectors || [];
+  sectors.forEach((s, i) => {
+    sec[s.sector] = { rank: i + 1 };
+  });
+  sessionStorage.setItem(INDUSTRY_INTEL_SNAPSHOT_KEY, JSON.stringify({ v: 2, ind, sec }));
+}
+
+function clearIndustrySnapshot() {
+  sessionStorage.removeItem(INDUSTRY_INTEL_SNAPSHOT_KEY);
+}
+
+function findIndustryPlacement(name, top, avoid) {
+  const ti = top.findIndex((x) => x.name === name);
+  if (ti >= 0) return { bucket: "top", rank: ti + 1 };
+  const ai = avoid.findIndex((x) => x.name === name);
+  if (ai >= 0) return { bucket: "avoid", rank: ai + 1 };
+  return null;
+}
+
+function snapshotIndustryLayer(prevMap) {
+  if (!prevMap) return {};
+  return prevMap.ind != null ? prevMap.ind : prevMap;
+}
+
+function formatSectorMovement(sector, index, prevSecMap) {
+  const rank = index + 1;
+  const hasBaseline = prevSecMap && Object.keys(prevSecMap).length > 0;
+  if (!hasBaseline) {
+    return { text: "—", cls: "flat" };
+  }
+  const prev = prevSecMap[sector];
+  if (!prev) {
+    return { text: "new", cls: "new" };
+  }
+  const delta = prev.rank - rank;
+  if (delta > 0) return { text: `↑ #${prev.rank} → #${rank}`, cls: "up" };
+  if (delta < 0) return { text: `↓ #${prev.rank} → #${rank}`, cls: "down" };
+  return { text: `#${rank}`, cls: "flat" };
+}
+
+function formatIndustryMovement(name, prevMap, top, avoid) {
+  const layer = snapshotIndustryLayer(prevMap);
+  const curr = findIndustryPlacement(name, top, avoid);
+  const hasBaseline = layer && Object.keys(layer).length > 0;
+
+  if (!hasBaseline) {
+    return { text: "—", cls: "flat" };
+  }
+
+  const prev = layer[name];
+  if (!prev && curr) {
+    return { text: "new", cls: "new" };
+  }
+  if (!prev && !curr) {
+    return { text: "—", cls: "flat" };
+  }
+  if (prev && !curr) {
+    if (prev.bucket === "top") {
+      return { text: `↓ #${prev.rank} → off list`, cls: "down" };
+    }
+    if (prev.bucket === "avoid") {
+      return { text: `↑ left avoid`, cls: "up" };
+    }
+    return { text: "—", cls: "flat" };
+  }
+
+  if (prev.bucket === "top" && curr.bucket === "avoid") {
+    return { text: `↓ #${prev.rank} → Avoid`, cls: "down" };
+  }
+  if (prev.bucket === "avoid" && curr.bucket === "top") {
+    return { text: `↑ Avoid → #${curr.rank}`, cls: "up" };
+  }
+  if (prev.bucket === curr.bucket) {
+    const delta = prev.rank - curr.rank;
+    if (delta > 0) return { text: `↑ #${prev.rank} → #${curr.rank}`, cls: "up" };
+    if (delta < 0) return { text: `↓ #${prev.rank} → #${curr.rank}`, cls: "down" };
+    return { text: `#${curr.rank}`, cls: "flat" };
+  }
+  return { text: "—", cls: "flat" };
+}
+
+function macroControlsToQuery() {
+  return {
+    rates: $("macroRates").value,
+    inflation: $("macroInflation").value,
+    yields: $("macroYields").value,
+    growth: $("macroGrowth").value,
+  };
+}
+
+let suppressMacroSelectEvents = false;
+
+function isMacroAutoSource() {
+  const el = $("macroSourceAuto");
+  return el && el.checked;
+}
+
+function ensureSelectOption(selectEl, value) {
+  if (!selectEl || value === undefined || value === null) return;
+  const v = String(value);
+  const allowed = [...selectEl.options].map((o) => o.value);
+  if (allowed.includes(v)) {
+    selectEl.value = v;
+    return;
+  }
+  console.warn("Macro auto: value not in list", selectEl.id, v, allowed);
+}
+
+function setMacroSelects(macro) {
+  if (!macro || typeof macro !== "object") return;
+  suppressMacroSelectEvents = true;
+  ensureSelectOption($("macroRates"), macro.rates);
+  ensureSelectOption($("macroInflation"), macro.inflation);
+  ensureSelectOption($("macroYields"), macro.yields);
+  ensureSelectOption($("macroGrowth"), macro.growth);
+  suppressMacroSelectEvents = false;
+}
+
+function escapeHtml(s) {
+  return String(s ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function renderMacroConfidence(conf, usedFallback) {
+  const el = $("macroConfidenceRow");
+  if (!el) return;
+  if (!isMacroAutoSource()) {
+    el.hidden = true;
+    el.textContent = "";
+    return;
+  }
+  if (usedFallback) {
+    el.hidden = false;
+    el.innerHTML =
+      "<strong>Auto macro</strong> — Tavily had no API key or no usable text; <strong>default preset</strong> is applied. Switch to Manual to edit.";
+    return;
+  }
+  if (!conf) {
+    el.hidden = true;
+    el.textContent = "";
+    return;
+  }
+  el.hidden = false;
+  el.innerHTML = [
+    "<strong>Auto confidence (vote share)</strong> — ",
+    `Rates ${escapeHtml(conf.rates)}% · `,
+    `Inflation ${escapeHtml(conf.inflation)}% · `,
+    `Yields ${escapeHtml(conf.yields)}% · `,
+    `Growth ${escapeHtml(conf.growth)}%`,
+  ].join("");
+}
+
+async function fetchMacroFromTavilyApi() {
+  syncTavilyMacroFromInput();
+  const u = new URL("/macro-from-tavily", window.location.origin);
+  if (activeTavilyMacroDomains.length) {
+    u.searchParams.set("tavilyDomains", activeTavilyMacroDomains.join(","));
+  }
+  if (activeTavilyMacroDomainHint) {
+    u.searchParams.set("domainHint", activeTavilyMacroDomainHint);
+  }
+  const res = await fetch(u.toString(), {
+    method: "GET",
+    headers: { Accept: "application/json" },
+  });
+  const raw = await res.text();
+  const ct = (res.headers.get("content-type") ?? "").toLowerCase();
+  if (!res.ok) {
+    throw new Error(`Macro auto failed (${res.status}). ${raw.slice(0, 200)}`.trim());
+  }
+  if (!ct.includes("json") && !raw.trimStart().startsWith("{")) {
+    throw new Error(
+      "Macro auto: server returned HTML instead of JSON. Restart the backend after `npm run build` so /macro-from-tavily is registered."
+    );
+  }
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    throw new Error("Macro auto: invalid JSON from server.");
+  }
+  if (!data.macro || typeof data.macro !== "object") {
+    throw new Error("Macro auto: response missing macro object.");
+  }
+  return data;
+}
+
+async function applyAutoMacroFromTavily() {
+  const status = $("industryIntelStatus");
+  showStatus(status, "Fetching macro via Tavily (four research queries)…", null);
+  try {
+    const data = await fetchMacroFromTavilyApi();
+    setMacroSelects(data.macro);
+    renderMacroConfidence(data.confidence, data.usedFallback);
+    const m = data.macro;
+    const presetNote =
+      m.rates === "Stable" &&
+      m.inflation === "Stable" &&
+      m.yields === "Rising" &&
+      m.growth === "Expanding"
+        ? " (same as default preset — Tavily may agree with your baseline or had no strong signal)."
+        : "";
+    if (!data.usedFallback) {
+      showStatus(
+        status,
+        `Macro (Tavily): rates ${m.rates}, inflation ${m.inflation}, yields ${m.yields}, growth ${m.growth}${presetNote} Loading ranks…`,
+        null
+      );
+    } else {
+      showStatus(
+        status,
+        "Tavily unavailable or empty — kept default macro. Set TAVILY_API_KEY and restart the server.",
+        null
+      );
+    }
+  } catch (e) {
+    showStatus(status, e.message || String(e), "error");
+    const el = $("macroConfidenceRow");
+    if (el && isMacroAutoSource()) {
+      el.hidden = false;
+      el.innerHTML =
+        "<strong>Auto macro failed</strong> — using on-screen values. Check Tavily API key or try again.";
+    }
+  }
+}
+
+async function fetchIndustryIntelligenceJson(macro, timeoutMs = 30000) {
+  const endpoint = new URL("/industry-intelligence", window.location.origin);
+  endpoint.searchParams.set("rates", macro.rates);
+  endpoint.searchParams.set("inflation", macro.inflation);
+  endpoint.searchParams.set("yields", macro.yields);
+  endpoint.searchParams.set("growth", macro.growth);
+  if (activeNarrativeSources.length) {
+    endpoint.searchParams.set("sources", activeNarrativeSources.join(","));
+  }
+  if (activeNarrativeUrls.length) {
+    endpoint.searchParams.set("sourceUrls", activeNarrativeUrls.join("\n"));
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let res;
+  try {
+    res = await fetch(endpoint.toString(), { method: "GET", signal: controller.signal });
+  } catch (err) {
+    if (err && err.name === "AbortError") {
+      throw new Error(`Request timed out after ${Math.round(timeoutMs / 1000)}s`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Request failed (${res.status}). ${text}`.trim());
+  }
+  return res.json();
+}
+
+function renderClassPill(cl) {
+  const low = (cl || "").toLowerCase();
+  const wrap = document.createElement("span");
+  const mid = low === "watch" || low === "neutral";
+  wrap.className = `classPill ${low === "buy" ? "buy" : mid ? "neutral" : "avoid"}`;
+  wrap.textContent = cl || "";
+  return wrap;
+}
+
+function signalStrengthPillClass(strength) {
+  const s = String(strength || "").toUpperCase();
+  if (s === "STRONG") return "signalPill strong";
+  if (s === "WEAK") return "signalPill weak";
+  return "signalPill moderate";
+}
+
+function strengthArrow(strength) {
+  const s = String(strength || "").toUpperCase();
+  if (s === "STRONG") return "↑";
+  if (s === "WEAK") return "↓";
+  return "→";
+}
+
+function momHuman(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return "—";
+  if (n >= 0.62) return "High";
+  if (n >= 0.48) return "Mid";
+  return "Low";
+}
+
+function breadthHuman(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return "—";
+  if (n >= 0.58) return "Strong";
+  if (n >= 0.45) return "Mixed";
+  return "Thin";
+}
+
+function rsHuman(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return "—";
+  if (n >= 0.62) return "Leader";
+  if (n >= 0.48) return "Inline";
+  return "Laggard";
+}
+
+function verdictHuman(cl) {
+  const u = String(cl || "").toUpperCase();
+  if (u === "BUY") return "BUY";
+  if (u === "WATCH" || u === "NEUTRAL") return "Watch";
+  return "Avoid";
+}
+
+function renderSectorTopList(el, sectors, prevSec, prevInd, top, avoid) {
+  el.textContent = "";
+  if (!sectors.length) {
+    const p = document.createElement("p");
+    p.className = "intelEmpty";
+    p.textContent = "No sector aggregates (waiting for industry data).";
+    el.appendChild(p);
+    return;
+  }
+  for (let i = 0; i < sectors.length; i++) {
+    const sv = sectors[i];
+    const card = document.createElement("article");
+    card.className = "sectorCard sectorCardCompressed";
+    const head = document.createElement("div");
+    head.className = "sectorCardHead";
+    const rank = document.createElement("span");
+    rank.className = "sectorRank";
+    rank.textContent = `#${i + 1}`;
+    const headText = document.createElement("div");
+    headText.className = "sectorHeadText";
+    const title = document.createElement("div");
+    title.className = "sectorTitle";
+    title.textContent = sv.sector;
+
+    const hero = document.createElement("div");
+    hero.className = "sectorHeroLine";
+    const st = String(sv.signal_strength || "MODERATE").toUpperCase();
+    const sigPill = document.createElement("span");
+    sigPill.className = signalStrengthPillClass(st);
+    sigPill.textContent = `${st} ${strengthArrow(st)}`;
+    const scoreNum = Number(sv.sector_score).toFixed(2);
+    hero.appendChild(sigPill);
+    hero.appendChild(document.createTextNode(` (${scoreNum})`));
+    const sm = formatSectorMovement(sv.sector, i, prevSec);
+    const mspan = document.createElement("span");
+    mspan.className = `rankMove sectorHeroMove ${sm.cls}`;
+    mspan.textContent = sm.text;
+    hero.appendChild(mspan);
+
+    const participation =
+      sv.participation_line || sv.signal_summary || "Mixed participation vs macro.";
+    const sub = document.createElement("div");
+    sub.className = "sectorParticipationLine";
+    sub.textContent = participation;
+
+    headText.appendChild(title);
+    headText.appendChild(hero);
+    headText.appendChild(sub);
+    head.appendChild(rank);
+    head.appendChild(headText);
+    card.appendChild(head);
+
+    const playsTitle = document.createElement("div");
+    playsTitle.className = "sectorSectionLabel sectorSectionLabelHero";
+    playsTitle.textContent = "Top plays";
+    card.appendChild(playsTitle);
+
+    const plays = document.createElement("div");
+    plays.className = "sectorTopPlays";
+    const pins = sv.industries || [];
+    for (let p = 0; p < pins.length; p++) {
+      const pin = pins[p];
+      const row = document.createElement("div");
+      row.className = "sectorTopPlayRow";
+      const pinRank = document.createElement("div");
+      pinRank.className = "topPlayRank";
+      pinRank.textContent = `#${p + 1}`;
+      const body = document.createElement("div");
+      body.className = "topPlayBody";
+      const nameRow = document.createElement("div");
+      nameRow.className = "topPlayNameRow";
+      const nm = document.createElement("span");
+      nm.className = "topPlayName";
+      nm.textContent = pin.name;
+      nameRow.appendChild(nm);
+      if (p === 0) {
+        const fire = document.createElement("span");
+        fire.className = "topPlayFire";
+        fire.textContent = " 🔥";
+        fire.title = "Leading industry in this sector";
+        nameRow.appendChild(fire);
+      }
+      const detail = document.createElement("div");
+      detail.className = "topPlayDetail";
+      const mm = momHuman(pin.momentum_score);
+      const bb = breadthHuman(pin.breadth_score);
+      const rr = rsHuman(pin.relative_strength_score);
+      detail.appendChild(
+        document.createTextNode(`Mom: ${mm} · Breadth: ${bb} · RS: ${rr} → `)
+      );
+      const vb = document.createElement("span");
+      vb.className = `verdictTag verdict-${String(pin.classification || "WATCH").toLowerCase()}`;
+      vb.textContent = verdictHuman(pin.classification);
+      detail.appendChild(vb);
+      const indMove = formatIndustryMovement(pin.name, prevInd, top, avoid);
+      if (indMove.text && indMove.text !== "—") {
+        detail.appendChild(document.createTextNode(" "));
+        const mv = document.createElement("span");
+        mv.className = `rankMove ${indMove.cls}`;
+        mv.textContent = indMove.text;
+        detail.appendChild(mv);
+      }
+      body.appendChild(nameRow);
+      body.appendChild(detail);
+      row.appendChild(pinRank);
+      row.appendChild(body);
+      plays.appendChild(row);
+    }
+    card.appendChild(plays);
+
+    const whyLabel = document.createElement("div");
+    whyLabel.className = "sectorSectionLabel";
+    whyLabel.textContent = "Why";
+    card.appendChild(whyLabel);
+    const why = document.createElement("p");
+    why.className = "sectorWhyLine";
+    why.textContent =
+      sv.why_one_liner ||
+      (Array.isArray(sv.narrative) && sv.narrative.length ? sv.narrative[0] : "") ||
+      "Add narrative sources above for richer context, or use macro + plays as the main signal.";
+    card.appendChild(why);
+
+    el.appendChild(card);
+  }
+}
+
+function renderAvoidIndustryGrid(el, avoidList, prevInd, topIndustries, avoidForPlacement) {
+  el.textContent = "";
+  if (!avoidList.length) {
+    const p = document.createElement("p");
+    p.className = "intelEmpty";
+    p.textContent = "No industries in the avoid / weak slice.";
+    el.appendChild(p);
+    return;
+  }
+  for (let j = 0; j < avoidList.length; j++) {
+    const ind = avoidList[j];
+    const card = document.createElement("article");
+    card.className = "avoidWeakCard";
+    const head = document.createElement("div");
+    head.className = "avoidWeakCardHead";
+    const rank = document.createElement("span");
+    rank.className = "avoidWeakRank";
+    rank.textContent = `#${j + 1}`;
+    const title = document.createElement("div");
+    title.className = "avoidWeakTitle";
+    title.textContent = ind.name;
+    head.appendChild(rank);
+    head.appendChild(title);
+    card.appendChild(head);
+    const meta = document.createElement("div");
+    meta.className = "avoidWeakMeta";
+    const move = formatIndustryMovement(ind.name, prevInd, topIndustries, avoidForPlacement);
+    meta.appendChild(
+      document.createTextNode(
+        `${verdictHuman(ind.classification)} · Mom ${momHuman(ind.momentum_score)} · Br ${breadthHuman(ind.breadth_score)} · RS ${rsHuman(ind.relative_strength_score)} · score ${ind.final_score != null ? Number(ind.final_score).toFixed(2) : "—"} · `
+      )
+    );
+    const spanM = document.createElement("span");
+    spanM.className = `rankMove ${move.cls}`;
+    spanM.textContent = move.text;
+    meta.appendChild(spanM);
+    meta.appendChild(document.createTextNode(" · "));
+    meta.appendChild(renderClassPill(ind.classification));
+    card.appendChild(meta);
+    el.appendChild(card);
+  }
+}
+
+function renderIndustryIntelUI(data, prevMap) {
+  const macro = data.macro;
+  const prevInd = prevMap && prevMap.ind != null ? prevMap.ind : prevMap || {};
+  const prevSec = (prevMap && prevMap.sec) || {};
+  $("macroIntelCard").hidden = false;
+  $("industryIntelInsight").hidden = false;
+
+  const regimeChip =
+    macro.regime_chip && String(macro.regime_chip).trim()
+      ? macro.regime_chip
+      : (macro.regime || "").replace(/_/g, " ");
+  $("macroRegimePill").textContent = regimeChip;
+  $("macroHumanHeadline").textContent =
+    macro.human_headline ||
+    "Macro backdrop — see narrative below for how to position.";
+  $("macroGlLine").textContent =
+    macro.growth_liquidity_note || "Adjust macro inputs for growth, yields, and liquidity.";
+  const sectorLine = macro.sector_bias_line || "";
+  const sectorBlock = $("macroSectorBiasBlock");
+  const biasLineEl = $("macroSectorBiasLine");
+  if (biasLineEl) biasLineEl.textContent = sectorLine;
+  if (sectorBlock) sectorBlock.hidden = !sectorLine;
+  $("macroLabelText").textContent = macro.label;
+  $("industryIntelInsight").textContent = data.insight;
+
+  const top = data.top_industries || [];
+  const avoid = data.avoid_list || [];
+  const sectors = data.top_sectors || [];
+
+  const sectorTopListEl = $("sectorTopList");
+  if (sectorTopListEl) renderSectorTopList(sectorTopListEl, sectors, prevSec, prevInd, top, avoid);
+
+  const avoidGrid = $("avoidIndustryGrid");
+  if (avoidGrid) renderAvoidIndustryGrid(avoidGrid, avoid, prevInd, top, avoid);
+}
+
+let industryIntelBusy = false;
+
+async function waitIndustryIntelIdle(maxMs = 180000) {
+  const t0 = Date.now();
+  while (industryIntelBusy && Date.now() - t0 < maxMs) {
+    await new Promise((r) => setTimeout(r, 100));
+  }
+}
+
+async function loadIndustryIntelligence() {
+  if (industryIntelBusy) return;
+  industryIntelBusy = true;
+  const status = $("industryIntelStatus");
+  const prevMap = readIndustrySnapshot();
+  syncNarrativeFromInput();
+  showStatus(status, "Loading sector intelligence (Trendlyne + narrative merge)…", null);
+  try {
+    const macro = macroControlsToQuery();
+    const data = await fetchIndustryIntelligenceJson(macro);
+    renderIndustryIntelUI(data, prevMap);
+    writeIndustrySnapshot(data);
+    const hint = prevMap
+      ? "Updated. Movement compares to your previous run this session."
+      : "Baseline saved. Change macro inputs again to see rank movement.";
+    showStatus(status, hint, null);
+  } catch (e) {
+    showStatus(status, e.message || String(e), "error");
+    $("macroIntelCard").hidden = true;
+    $("industryIntelInsight").hidden = true;
+  } finally {
+    industryIntelBusy = false;
+  }
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   $("submitStocks").addEventListener("click", submitStocks);
   $("loadCsvFile").addEventListener("click", loadCsvFromFile);
-  $("runCombinedAnalysis").addEventListener("click", runCombinedAnalysis);
+  $("loadIndustryIntel").addEventListener("click", loadIndustryIntelligence);
+  $("clearIndustryBaseline").addEventListener("click", () => {
+    clearIndustrySnapshot();
+    loadIndustryIntelligence();
+  });
+  const macroIds = ["macroRates", "macroInflation", "macroYields", "macroGrowth"];
+  for (const id of macroIds) {
+    $(id).addEventListener("change", () => {
+      if (suppressMacroSelectEvents) return;
+      if (isMacroAutoSource()) {
+        $("macroSourceManual").checked = true;
+        $("macroConfidenceRow").hidden = true;
+        $("macroConfidenceRow").textContent = "";
+      }
+      loadIndustryIntelligence();
+    });
+  }
+
+  $("macroSourceAuto").addEventListener("change", () => {
+    if ($("macroSourceAuto").checked) {
+      applyAutoMacroFromTavily()
+        .catch(() => undefined)
+        .then(() => waitIndustryIntelIdle())
+        .then(() => loadIndustryIntelligence());
+    }
+  });
+
+  $("macroSourceManual").addEventListener("change", () => {
+    if ($("macroSourceManual").checked) {
+      $("macroConfidenceRow").hidden = true;
+      $("macroConfidenceRow").textContent = "";
+      loadIndustryIntelligence();
+    }
+  });
+
+  $("fetchMacroFromTavily").addEventListener("click", () => {
+    $("macroSourceAuto").checked = true;
+    applyAutoMacroFromTavily()
+      .catch(() => undefined)
+      .then(() => waitIndustryIntelIdle())
+      .then(() => loadIndustryIntelligence());
+  });
+
   prepopulateDefaultNarrativeSources();
-  // On first load, compute themes only. Recommendations will run
-  // after the user uploads/submits stocks or explicitly runs analysis.
-  loadThemes();
+  restoreTavilyMacroUi();
+  syncNarrativeFromInput();
+  const tavilyDomainsEl = $("tavilyMacroDomainsInput");
+  const tavilyHintEl = $("tavilyMacroDomainHint");
+  if (tavilyDomainsEl) tavilyDomainsEl.addEventListener("input", syncTavilyMacroFromInput);
+  if (tavilyHintEl) tavilyHintEl.addEventListener("input", syncTavilyMacroFromInput);
+  if ($("macroSourceAuto").checked) {
+    applyAutoMacroFromTavily()
+      .catch(() => undefined)
+      .then(() => waitIndustryIntelIdle())
+      .then(() => loadIndustryIntelligence());
+  } else {
+    loadIndustryIntelligence();
+  }
 });
 

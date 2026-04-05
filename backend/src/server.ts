@@ -18,6 +18,14 @@ import {
   validateStock,
 } from "./services/stockIngestionService";
 import { enrichTagsIfNeeded } from "./services/aiEnrichmentService";
+import {
+  defaultMacroInput,
+  getIndustryIntelligence,
+  macroInputSchema,
+  type IndustryIntelNarrativeOpts,
+  type MacroInput,
+} from "./services/industryIntelligenceService";
+import { buildMacroFromTavily, type MacroTavilyAutoOptions } from "./services/macroTavilyAutoService";
 
 dotenv.config();
 
@@ -35,9 +43,6 @@ const PORT = Number(process.env.PORT ?? 3000);
 const webAppDir = path.resolve(__dirname, "..", "..", "webapp");
 const indexHtmlPath = path.join(webAppDir, "index.html");
 const hasWebApp = fs.existsSync(indexHtmlPath);
-if (hasWebApp) {
-  app.use(express.static(webAppDir));
-}
 
 const tagsSchema = z.preprocess((v) => {
   if (typeof v === "string") {
@@ -132,6 +137,49 @@ function parseNarrativeUrls(input: unknown): string[] {
   return out;
 }
 
+/** Hostnames for Tavily Research `include_domains` (macro auto + theme narrative). */
+function hostnameFromToken(raw: string): string {
+  const t = raw.trim();
+  if (!t) return "";
+  try {
+    const u = t.includes("://") ? new URL(t) : new URL(`https://${t}`);
+    return u.hostname.replace(/^www\./, "").toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function parseTavilyMacroDomainList(input: unknown): string[] {
+  if (typeof input !== "string") return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const part of input.split(/[,\n]/g)) {
+    const h = hostnameFromToken(part);
+    if (!h || seen.has(h)) continue;
+    seen.add(h);
+    out.push(h);
+    if (out.length >= 16) break;
+  }
+  return out;
+}
+
+function macroTavilyOptionsFromQuery(req: express.Request): MacroTavilyAutoOptions {
+  const rawDomains =
+    typeof req.query.tavilyDomains === "string"
+      ? req.query.tavilyDomains
+      : typeof req.query.macroTavilyDomains === "string"
+        ? req.query.macroTavilyDomains
+        : "";
+  const includeDomains = parseTavilyMacroDomainList(rawDomains);
+  const dh = req.query.domainHint ?? req.query.macroDomainHint;
+  const domainHint =
+    typeof dh === "string" && dh.trim() ? dh.trim().slice(0, 220) : undefined;
+  return {
+    ...(includeDomains.length ? { includeDomains } : {}),
+    ...(domainHint ? { domainHint } : {}),
+  };
+}
+
 app.get("/", (_req, res) => {
   if (hasWebApp) return res.sendFile(indexHtmlPath);
   return res.json({ ok: true, service: "Personal Finance MVP API" });
@@ -168,6 +216,80 @@ app.get(
     const dynamicThemes = macroThemesToThemeModels(macroThemes);
     const themes = dynamicThemes.length ? dynamicThemes : getBaseThemes();
     res.json({ themes });
+  })
+);
+
+const macroQueryPartialSchema = z.object({
+  rates: z.enum(["Rising", "Stable", "Falling"]).optional(),
+  inflation: z.enum(["Rising", "Stable", "Cooling"]).optional(),
+  yields: z.enum(["Rising", "Stable", "Falling"]).optional(),
+  growth: z.enum(["Slowing", "Expanding", "Contracting"]).optional(),
+});
+
+function mergeMacroInput(partial: Partial<MacroInput>): MacroInput {
+  return { ...defaultMacroInput, ...partial };
+}
+
+function narrativeOptsFromQuery(req: express.Request): IndustryIntelNarrativeOpts {
+  const domains = parseNarrativeSources(req.query.sources);
+  const sourceUrls = parseNarrativeUrls(req.query.sourceUrls);
+  const forceRefresh = String(req.query.refresh ?? "").toLowerCase() === "1";
+  return { domains, sourceUrls, forceRefresh };
+}
+
+app.get(
+  "/macro-from-tavily",
+  asyncHandler(async (req, res) => {
+    const debug = String(req.query.debug ?? "").toLowerCase() === "1";
+    const opts = macroTavilyOptionsFromQuery(req);
+    const result = await buildMacroFromTavily(debug, Object.keys(opts).length ? opts : undefined);
+    res.json(result);
+  })
+);
+
+app.get(
+  "/industry-intelligence",
+  asyncHandler(async (req, res) => {
+    const parsed = macroQueryPartialSchema.safeParse(req.query);
+    if (!parsed.success) {
+      return res.status(400).json({
+        ok: false,
+        error: "ValidationError",
+        message: "Invalid macro query parameters",
+        issues: parsed.error.issues,
+      });
+    }
+    const macro = mergeMacroInput(parsed.data);
+    const data = await getIndustryIntelligence(macro, narrativeOptsFromQuery(req));
+    res.json(data);
+  })
+);
+
+app.post(
+  "/industry-intelligence",
+  asyncHandler(async (req, res) => {
+    const body = req.body as
+      | { macro?: Partial<MacroInput>; sources?: string; sourceUrls?: string }
+      | undefined;
+    const macro = mergeMacroInput(body?.macro ?? {});
+    const validated = macroInputSchema.safeParse(macro);
+    if (!validated.success) {
+      return res.status(400).json({
+        ok: false,
+        error: "ValidationError",
+        message: "Invalid macro input",
+        issues: validated.error.issues,
+      });
+    }
+    const domains = parseNarrativeSources(body?.sources ?? req.query.sources);
+    const sourceUrls = parseNarrativeUrls(body?.sourceUrls ?? req.query.sourceUrls);
+    const forceRefresh = String(req.query.refresh ?? "").toLowerCase() === "1";
+    const data = await getIndustryIntelligence(validated.data, {
+      domains,
+      sourceUrls,
+      forceRefresh,
+    });
+    res.json(data);
   })
 );
 
@@ -280,6 +402,11 @@ app.post(
     });
   })
 );
+
+// Static assets after JSON API routes so paths like `/macro-from-tavily` never hit the file layer first.
+if (hasWebApp) {
+  app.use(express.static(webAppDir));
+}
 
 // For SPA-like routing (optional). Only used if the webapp is present.
 if (hasWebApp) {

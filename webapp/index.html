@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Sentinel</title>
-    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="styles.css?v=20260404-nested-flat" />
   </head>
   <body>
     <header>
@@ -12,31 +12,146 @@
         <img class="logo" src="assets/logo.svg?v=20260403-robot" alt="Sentinel logo" />
         <div class="brandText">
           <div class="title">Sentinel</div>
-          <div class="subtitle">Deterministic themes & stock scoring (India-focused)</div>
+          <div class="subtitle">Sector flow, macro lens & stock scoring (India-focused)</div>
         </div>
       </div>
     </header>
 
     <main>
       <div class="container">
-        <section>
-          <h2>Themes</h2>
-          <div class="hint">Narrative sources: add domains/URLs (comma or new line). Default sources are always included.</div>
-          <textarea
-            id="narrativeSourcesInput"
-            class="textarea narrativeSourcesInput"
-            placeholder="moneycontrol.com&#10;economictimes.indiatimes.com&#10;https://business-standard.com"
-          ></textarea>
-          <button id="runCombinedAnalysis" class="button secondaryButton" type="button">Run Combined Analysis</button>
-          <div id="trendsStatus" class="status">Loading themes...</div>
-          <div id="trendsList" class="cards"></div>
+        <section id="industryIntelSection">
+          <h2>Macro &amp; industry momentum</h2>
+          <div class="hint">
+            <strong>Momentum</strong> (sector/industry weekly % change, breadth) is loaded from <strong>Trendlyne</strong> on the server. Cards below blend that with macro, optional narrative/Tavily themes, and rankings. Movement vs your last run is session-only.
+          </div>
+          <div class="sourceConfigBlock">
+            <label class="narrativeInlineLabel" for="narrativeSourcesInput"
+              >Narrative for sector themes (domains + optional https URLs)</label
+            >
+            <p class="fieldMicrohint">
+              <strong>Weekly momentum / tape</strong> does not come from this box — it comes from Trendlyne JSON in the backend. Lines here default to Trendlyne as a <em>reference</em> and for Tavily/theme context. When loading <strong>industry intelligence</strong> and <strong>recommendations</strong>, Tavily Research uses these domains; exact <code>https://</code> URLs are fetched for theme keywords. This is not the macro dials — it shapes <em>which stories/themes</em> surface on sector cards.
+            </p>
+            <textarea
+              id="narrativeSourcesInput"
+              class="textarea narrativeSourcesInput narrativeSourcesIntel"
+              placeholder="trendlyne.com&#10;https://trendlyne.com/equity/sector-industry-analysis/overall/week-changeP/&#10;moneycontrol.com"
+              aria-label="Narrative source domains and URLs for sector themes"
+            ></textarea>
+          </div>
+          <div class="sourceConfigBlock tavilyMacroPanel">
+            <div class="tavilyMacroPanelHead">
+              <span class="narrativeInlineLabel">Tavily macro auto (rates · inflation · yields · growth)</span>
+            </div>
+            <p class="fieldMicrohint">
+              Used only for <strong>Auto (Tavily)</strong> and <strong>Fetch macro</strong>: four Tavily Research calls that vote on the macro dropdowns. Defaults include Trendlyne plus policy/stat domains; you can edit. Preferred domains map to Tavily&rsquo;s source allow-list; the reference hint is woven into the research prompts (India macro context).
+            </p>
+            <label class="narrativeInlineLabel" for="tavilyMacroDomainHint">Reference dashboard / site hint (optional)</label>
+            <input
+              type="text"
+              id="tavilyMacroDomainHint"
+              class="textInput tavilyMacroHintInput"
+              placeholder="e.g. indiamacroindicators.co.in or rbi.org.in"
+              autocomplete="off"
+              aria-label="Reference host or label for Tavily macro research prompts"
+            />
+            <label class="narrativeInlineLabel" for="tavilyMacroDomainsInput">Preferred domains for those four calls (optional)</label>
+            <textarea
+              id="tavilyMacroDomainsInput"
+              class="textarea narrativeSourcesInput tavilyMacroDomainsTextarea"
+              placeholder="trendlyne.com&#10;rbi.org.in&#10;mospi.gov.in"
+              aria-label="Preferred domains for Tavily macro auto research"
+            ></textarea>
+          </div>
+          <div class="macroSourceRow">
+            <span class="macroSourceLabel">Macro source</span>
+            <label class="macroSourceOption">
+              <input type="radio" name="macroSource" id="macroSourceAuto" value="auto" checked />
+              Auto (Tavily)
+            </label>
+            <label class="macroSourceOption">
+              <input type="radio" name="macroSource" id="macroSourceManual" value="manual" />
+              Manual
+            </label>
+            <button id="fetchMacroFromTavily" class="button secondaryButton macroFetchBtn" type="button">
+              Fetch macro
+            </button>
+          </div>
+          <div id="macroConfidenceRow" class="macroConfidenceRow" hidden></div>
+          <div class="macroGrid" id="macroControls">
+            <label class="macroField">
+              <span>Rates</span>
+              <select id="macroRates" class="selectInput" aria-label="Rates trend">
+                <option value="Rising">Rising</option>
+                <option value="Stable" selected>Stable</option>
+                <option value="Falling">Falling</option>
+              </select>
+            </label>
+            <label class="macroField">
+              <span>Inflation</span>
+              <select id="macroInflation" class="selectInput" aria-label="Inflation trend">
+                <option value="Rising">Rising</option>
+                <option value="Stable" selected>Stable</option>
+                <option value="Cooling">Cooling</option>
+              </select>
+            </label>
+            <label class="macroField">
+              <span>Yields</span>
+              <select id="macroYields" class="selectInput" aria-label="Yields trend">
+                <option value="Rising" selected>Rising</option>
+                <option value="Stable">Stable</option>
+                <option value="Falling">Falling</option>
+              </select>
+            </label>
+            <label class="macroField">
+              <span>Growth</span>
+              <select id="macroGrowth" class="selectInput" aria-label="Growth trend">
+                <option value="Slowing">Slowing</option>
+                <option value="Expanding" selected>Expanding</option>
+                <option value="Contracting">Contracting</option>
+              </select>
+            </label>
+          </div>
+          <div class="intelActions">
+            <button id="loadIndustryIntel" class="button secondaryButton" type="button">Refresh industry data</button>
+            <button id="clearIndustryBaseline" class="button ghostButton" type="button">Reset movement baseline</button>
+          </div>
+          <div id="industryIntelStatus" class="status">Loading industry intelligence…</div>
+          <div id="macroIntelCard" class="macroSummaryCard" hidden>
+            <div class="macroSummaryTop">
+              <div class="macroSummaryMain">
+                <div class="macroRegimePill" id="macroRegimePill"></div>
+                <p class="macroHumanHeadline" id="macroHumanHeadline"></p>
+                <p class="macroGlLine" id="macroGlLine"></p>
+                <div class="macroSectorBiasBlock" id="macroSectorBiasBlock" hidden>
+                  <span class="macroSectorBiasLabel">Sector bias</span>
+                  <p class="macroSectorBiasLine" id="macroSectorBiasLine"></p>
+                </div>
+              </div>
+            </div>
+            <p class="macroLabelText" id="macroLabelText"></p>
+          </div>
+          <p id="industryIntelInsight" class="intelInsight" hidden></p>
+          <div class="intelFlow">
+            <section class="intelBlock" aria-labelledby="topSectorsHeading">
+              <h3 class="intelSubhead" id="topSectorsHeading">Top sectors</h3>
+              <p class="intelMicrohint">
+                Each card: combined score + read on participation, two top industries (human labels), one &quot;Why&quot; line. <strong>Momentum</strong> comes from Trendlyne weekly industry data. Keywords are deduped — no bullet soup.
+              </p>
+              <div id="sectorTopList" class="intelCardGrid" aria-live="polite"></div>
+            </section>
+            <section class="intelBlock intelBlockAvoid" aria-labelledby="avoidWeakHeading">
+              <h3 class="intelSubhead" id="avoidWeakHeading">Avoid / weak</h3>
+              <p class="intelMicrohint">Bottom of the same ranked universe (AVOID class or weakest slice). Shown after top sectors.</p>
+              <div id="avoidIndustryGrid" class="intelCardGrid intelCardGridAvoid" aria-live="polite"></div>
+            </section>
+          </div>
         </section>
 
         <section>
           <h2>Analyze stocks</h2>
           <div class="hint">Paste JSON, CSV (comma), or direct Excel table paste (tab-separated). Submit to recompute rankings.</div>
           <div class="matchInfo">
-            Filtering is deterministic: a theme qualifies when your stock's <b>sector/subSector</b> aligns with theme sectors and your <b>tags</b> overlap the theme keywords; and the overall theme relevance must be <b>&gt; 0.5</b>.
+            Recommendations still use a light theme overlap on your stock <b>sector/subSector</b> and <b>tags</b>; the macro section above is the primary read on where capital is tilting.
           </div>
           <textarea
             id="stocksInput"
@@ -60,7 +175,7 @@
       </div>
     </main>
 
-    <script src="app.js?v=20260403-2" defer></script>
+    <script src="app.js?v=20260404-trendlyne-defaults" defer></script>
   </body>
 </html>
 

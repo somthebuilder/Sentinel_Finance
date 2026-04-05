@@ -102,8 +102,9 @@ export function calculateFinalScore(stock: Stock, theme: Theme): number {
   const acceleration = accelerationScore(stock);
   const breakout = breakoutScore(stock);
 
-  // Theme + factor intelligence layer.
-  const stockScore = themeRelevance * 0.3 + fundamentalScore * 0.7 + acceleration * 0.05 + breakout * 0.05;
+  // Fundamentals-first; theme overlap is a light filter (narrative is not a primary signal).
+  const stockScore =
+    themeRelevance * 0.08 + fundamentalScore * 0.87 + acceleration * 0.025 + breakout * 0.025;
   const clipped = Math.max(0, Math.min(1, stockScore));
   return Number(clipped.toFixed(6));
 }
@@ -160,16 +161,26 @@ function isElite(stock: Stock): boolean {
   return isEliteByRules(stock);
 }
 
+/**
+ * Raw composites often clip at 1.0 (theme multiplier + elite + strong fundamentals).
+ * Squash only the top of the range so typical names are unchanged but "perfect" scores land mid‑high 0.8s.
+ */
+function calibrateRecommendationScore(raw: number): number {
+  const x = Math.max(0, Math.min(1, raw));
+  if (x <= 0.78) return Number(x.toFixed(6));
+  return Number(Math.min(0.88, 0.78 + (x - 0.78) * 0.38).toFixed(6));
+}
+
 function getTier(score: number): "A+ (High Growth)" | "A (Strong)" | "B (Watchlist)" | "C (Ignore)" {
-  if (score > 0.75) return "A+ (High Growth)";
-  if (score > 0.6) return "A (Strong)";
-  if (score > 0.5) return "B (Watchlist)";
+  if (score > 0.8) return "A+ (High Growth)";
+  if (score > 0.66) return "A (Strong)";
+  if (score > 0.54) return "B (Watchlist)";
   return "C (Ignore)";
 }
 
 function convictionForScore(score: number): "HIGH" | "MEDIUM" | "LOW" {
-  if (score >= 0.7) return "HIGH";
-  if (score >= 0.5) return "MEDIUM";
+  if (score >= 0.74) return "HIGH";
+  if (score >= 0.54) return "MEDIUM";
   return "LOW";
 }
 
@@ -220,11 +231,11 @@ export async function rankStocksByTheme(themes: Theme[], stocks: Stock[]): Promi
 
         // Base score is deterministic; then weight by theme strength.
         const baseScore = calculateFinalScore(stock, theme);
-        const themeStrengthMultiplier = 1 + strengthNormalized * 0.3;
-        const eliteBoost = isElite(stock) ? 0.15 : 0;
+        const themeStrengthMultiplier = 1 + strengthNormalized * 0.08;
+        const eliteBoost = isElite(stock) ? 0.1 : 0;
         const rawComposite = baseScore * themeStrengthMultiplier + eliteBoost;
-        let score = Math.max(0, Math.min(1, rawComposite));
-        score = Number(score.toFixed(6));
+        const clipped = Math.max(0, Math.min(1, rawComposite));
+        let score = calibrateRecommendationScore(clipped);
 
         const reasons = generateReason(stock, theme, details);
         const strengthProfile = buildStrengthProfile(stock);

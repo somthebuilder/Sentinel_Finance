@@ -2,7 +2,7 @@ import { Theme } from "../models/theme";
 import { Stock } from "../models/stock";
 import { enrichThemeDriversWithTavily } from "./tavilyService";
 
-// Deterministic base themes. Tavily enriches only `drivers` (display/explanation), never ranking.
+// Deterministic base themes. Tavily enriches `drivers` for copy; theme strength in recommendations is mostly market breadth, not narrative.
 const BASE_THEMES: Theme[] = [
   {
     theme: "Technology",

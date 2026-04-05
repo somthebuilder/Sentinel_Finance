@@ -1,14 +1,8 @@
 import { Theme } from "../models/theme";
 import { PDFParse } from "pdf-parse";
+import { fetchTavilyResearchNarrative, type NarrativeResult } from "./tavilyResearch";
 import { getMarketThemeSignals } from "./marketTrendService";
 import { getBaseThemes } from "./themeService";
-
-type TavilyResult = {
-  title?: string;
-  content?: string;
-  url?: string;
-  score?: number;
-};
 
 export type MacroTheme = {
   theme: string;
@@ -101,6 +95,10 @@ function getEnv(name: string, fallback?: string) {
   return v;
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
 function getNarrativeEnv(primary: string, fallback?: string): string | undefined {
   const direct = getEnv(primary);
   if (direct !== undefined) return direct;
@@ -187,27 +185,26 @@ function sanitizeNarrativeUrl(input: string): string {
   }
 }
 
-function isAllowedDomain(url: string | undefined, includeDomains: string[]): boolean {
-  const host = getHostname(url);
-  if (!host) return false;
-  return includeDomains.some((d) => host === d || host.endsWith(`.${d}`));
-}
-
-function isHighSignalResult(r: TavilyResult): boolean {
+function isHighSignalResult(r: NarrativeResult): boolean {
   const title = normalizeText(r.title ?? "");
   const content = normalizeText(r.content ?? "");
   if (!title && !content) return false;
 
+  // Tavily Research synthesis row: short title, long body.
+  if ((r.title ?? "").includes("Tavily research") && (r.content ?? "").trim().length >= 80) {
+    return true;
+  }
+
   // Drop noisy listing/news-index patterns.
   const noisy = /(latest news|videos|photos|page \d+|page-\d+|newsletter|live updates)/i;
   if (noisy.test(r.title ?? "")) return false;
-  if ((r.title ?? "").trim().length < 20) return false;
+  if ((r.title ?? "").trim().length < 20 && (r.content ?? "").trim().length < 40) return false;
   return true;
 }
 
-function dedupeResults(results: TavilyResult[]): TavilyResult[] {
+function dedupeResults(results: NarrativeResult[]): NarrativeResult[] {
   const seen = new Set<string>();
-  const out: TavilyResult[] = [];
+  const out: NarrativeResult[] = [];
   for (const r of results) {
     const key = `${getHostname(r.url)}|${normalizeText(r.title ?? "").slice(0, 120)}`;
     if (!key || seen.has(key)) continue;
@@ -217,43 +214,12 @@ function dedupeResults(results: TavilyResult[]): TavilyResult[] {
   return out;
 }
 
-async function tavilySearch(query: string, includeDomains: string[]): Promise<TavilyResult[]> {
-  const apiKey = getNarrativeEnv("TRAVILY_API_KEY");
-  const baseUrl = getNarrativeEnv("TRAVILY_BASE_URL", "https://api.tavily.com");
-  const timeoutMs = Number(getNarrativeEnv("TAVILY_TIMEOUT_MS", "10000"));
-  if (!apiKey) return [];
-
-  const url = `${baseUrl!.replace(/\/$/, "")}/search`;
-  try {
-    const res = await fetchWithTimeout(
-      url,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-        body: JSON.stringify({
-          query,
-          include_domains: includeDomains,
-          search_depth: "advanced",
-          max_results: 20,
-          include_answer: false,
-          include_raw_content: false,
-        }),
-      },
-      timeoutMs
-    );
-    if (!res.ok) return [];
-
-    const json = await res.json().catch(() => null);
-    const results: TavilyResult[] = Array.isArray(json?.results) ? json.results : [];
-    const filtered = results
-      .filter((r) => isAllowedDomain(r.url, includeDomains))
-      .filter(isHighSignalResult)
-      .sort((a, b) => Number(b.score ?? 0) - Number(a.score ?? 0));
-    return dedupeResults(filtered).slice(0, 12);
-  } catch (err) {
-    console.warn("Tavily search failed, returning empty result set:", err);
-    return [];
-  }
+async function tavilyResearchMacro(query: string, includeDomains: string[]): Promise<NarrativeResult[]> {
+  const results = await fetchTavilyResearchNarrative(query, {
+    includeDomains: includeDomains.length ? includeDomains : undefined,
+  });
+  const filtered = results.filter(isHighSignalResult).sort((a, b) => Number(b.score ?? 0) - Number(a.score ?? 0));
+  return dedupeResults(filtered).slice(0, 14);
 }
 
 function htmlToText(rawHtml: string): string {
@@ -269,7 +235,7 @@ function htmlToText(rawHtml: string): string {
     .trim();
 }
 
-async function fetchExactSourceResults(sourceUrls: string[]): Promise<TavilyResult[]> {
+async function fetchExactSourceResults(sourceUrls: string[]): Promise<NarrativeResult[]> {
   if (!sourceUrls.length) return [];
   const timeoutMs = Number(getEnv("EXACT_SOURCE_TIMEOUT_MS", "6000"));
   const maxTextChars = Number(getEnv("EXACT_SOURCE_MAX_CHARS", "4000"));
@@ -315,7 +281,7 @@ async function fetchExactSourceResults(sourceUrls: string[]): Promise<TavilyResu
         content: clipped,
         url: cleanUrl,
         score: 1,
-      } satisfies TavilyResult;
+      } satisfies NarrativeResult;
     } catch (err) {
       console.warn("Exact source fetch failed, skipping URL:", cleanUrl, err);
       return null;
@@ -323,7 +289,7 @@ async function fetchExactSourceResults(sourceUrls: string[]): Promise<TavilyResu
   });
 
   const settled = await Promise.all(jobs);
-  const out: TavilyResult[] = [];
+  const out: NarrativeResult[] = [];
   for (const item of settled) {
     if (item) out.push(item);
   }
@@ -414,7 +380,7 @@ function countKeywordOccurrences(text: string, keyword: string): number {
   return count;
 }
 
-function computeNarrativeThemeScores(results: TavilyResult[]): Record<string, { score: number; hits: number }> {
+function computeNarrativeThemeScores(results: NarrativeResult[]): Record<string, { score: number; hits: number }> {
   const POSITIVE_WORDS = [
     "growth",
     "strong",
@@ -463,7 +429,7 @@ function computeNarrativeThemeScores(results: TavilyResult[]): Record<string, { 
   return out;
 }
 
-export function buildThemesFromKeywords(keywords: string[], corpus: string, results: TavilyResult[]): MacroTheme[] {
+export function buildThemesFromKeywords(keywords: string[], corpus: string, results: NarrativeResult[]): MacroTheme[] {
   const buckets: Record<string, { theme: string; keywords: string[]; keywordHits: number; articleHits: number; strength: number }> = {};
   for (const kw of keywords) {
     const k = normalizeText(kw);
@@ -503,11 +469,14 @@ export async function getDynamicMacroThemes(
   const cached = themeCache.get(cacheKey);
   if (!forceRefresh && cached && Date.now() - cached.cachedAtMs < ttlMs) return cached.themes;
 
-  const [tavilyResults, exactSourceResults] = await Promise.all([
-    tavilySearch(buildMacroQuery(), includeDomains),
+  const preflight = Number(getEnv("TAVILY_THEME_RESEARCH_PREFLIGHT_MS", "0"));
+  if (preflight > 0) await sleep(preflight);
+
+  const [researchResults, exactSourceResults] = await Promise.all([
+    tavilyResearchMacro(buildMacroQuery(), includeDomains),
     fetchExactSourceResults(exactUrls),
   ]);
-  const results = dedupeResults([...exactSourceResults, ...tavilyResults]);
+  const results = dedupeResults([...exactSourceResults, ...researchResults]);
   const corpus = results
     .map((r) => `${r.title ?? ""}\n${(r.content ?? "").slice(0, 320)}`.trim())
     .filter(Boolean)
@@ -530,8 +499,12 @@ export async function getDynamicMacroThemes(
           0
       );
       const marketScore = Number(marketSignals[themeName]?.score ?? 0.5);
-      const overlapBoost = Math.max(0, Math.min(0.25, overlapWeight * Math.min(narrativeScore, marketScore)));
-      const base = 0.5 * narrativeScore + 0.5 * marketScore;
+      // Narrative is confirmation only — cap its influence on theme strength (~5% + small overlap).
+      const overlapBoost = Math.max(
+        0,
+        Math.min(0.06, overlapWeight * 0.25 * Math.min(narrativeScore, marketScore))
+      );
+      const base = 0.05 * narrativeScore + 0.95 * marketScore;
       const strength = Math.max(0, Math.min(1, base + overlapBoost));
       const sourceEvidenceCount = Number(
         (marketSignals[themeName]?.evidenceCount ?? 0) + (narrativeSignals[themeName]?.hits ?? 0)
@@ -567,7 +540,7 @@ export function macroThemesToThemeModels(macroThemes: MacroTheme[]): Theme[] {
     theme: t.theme,
     sectors: (baseThemeMap.get(t.theme.toLowerCase())?.sectors ?? [t.theme]).slice(0, 10),
     keywords: keywordList,
-    rationale: `Macro theme strength: ${t.strength}. Blend = 50% market trend + 50% user-source narrative, overlap boost ${t.overlapBoost ?? 0}.`,
+    rationale: `Theme strength: ${t.strength}. Narrative is ~5% of the blend; market breadth dominates. Overlap boost ${t.overlapBoost ?? 0}. Use for labels/context, not primary ranking.`,
     strength: t.strength,
     marketScore: t.marketScore,
     narrativeScore: t.narrativeScore,

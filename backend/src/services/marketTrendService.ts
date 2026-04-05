@@ -4,23 +4,54 @@ type MarketThemeSignal = {
   sources: string[];
 };
 
-const MARKET_SOURCE_URLS = {
-  trendlyne: "https://trendlyne.com/equity/sector-industry-analysis/sector/month/",
-  nseAllIndices: "https://www.nseindia.com/api/allIndices",
-};
+/**
+ * Single market data source: Trendlyne sector/industry weekly (and YoY for penalty) JSON.
+ * @see https://trendlyne.com/equity/sector-industry-analysis/overall/week-changeP/?format=json
+ */
+const TRENDLYNE_MARKET_JSON =
+  "https://trendlyne.com/equity/sector-industry-analysis/overall/week-changeP/?format=json";
 
-const THEME_MARKET_KEYWORDS: Record<string, string[]> = {
-  Technology: ["it", "tech", "software", "information technology", "data center"],
-  "Capital Goods": ["capital goods", "industrial", "engineering", "infrastructure"],
-  Financials: ["bank", "financial", "nbfc", "private bank", "psu bank"],
-  Metals: ["metal", "steel", "mining"],
-  Consumption: ["fmcg", "consumer", "retail", "auto"],
-  Defense: ["defence", "defense", "aerospace"],
-  Railways: ["rail", "railway"],
-  "Energy Transition": ["energy", "power", "oil", "gas", "renewable", "utility"],
-  Healthcare: ["pharma", "health", "hospital", "biotech", "drug"],
-  Realty: ["realty", "real estate", "property", "housing"],
-  Chemicals: ["chemical", "fertilizer", "agrochemical", "petrochemical"],
+/**
+ * Map Trendlyne sector/industry labels (lowercased substring match, longest phrase wins).
+ */
+const THEME_SECTOR_PHRASES: Record<string, string[]> = {
+  Technology: [
+    "software & services",
+    "hardware technology",
+    "telecommunications equipment",
+    "telecom services",
+    "it consulting",
+    "internet software",
+    "data processing",
+  ],
+  Metals: ["metals & mining"],
+  Financials: ["banking and finance"],
+  Consumption: [
+    "fmcg",
+    "retailing",
+    "consumer durables",
+    "automobiles & auto",
+    "media",
+    "hotels restaurants",
+    "food, beverages & tobacco",
+    "textiles apparels",
+    "forest materials",
+    "diversified consumer services",
+  ],
+  Defense: ["aerospace", "defence", "defense"],
+  Railways: ["transportation", "railway", "rail "],
+  "Energy Transition": ["oil & gas", "utilities", "power - electric", "green & renewable"],
+  Healthcare: ["pharmaceuticals & biotechnology", "healthcare"],
+  Realty: ["realty"],
+  Chemicals: ["chemicals & petrochemicals", "fertilizers"],
+  "Capital Goods": [
+    "cement and construction",
+    "general industrials",
+    "general & industrial manufacturing",
+    "commercial services & supplies",
+    "electrical equipment",
+    "industrial machinery",
+  ],
 };
 
 const marketSignalCache = new Map<string, { signals: Record<string, MarketThemeSignal>; cachedAtMs: number }>();
@@ -41,6 +72,36 @@ async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: numbe
   }
 }
 
+type TlRow = { name: string; weekPct: number; yearPct: number };
+
+function extractTrendlyneRows(json: unknown): TlRow[] {
+  const body = (json as { body?: Record<string, unknown> })?.body;
+  if (!body) return [];
+  const out: TlRow[] = [];
+
+  for (const sectionKey of ["sector", "industry"] as const) {
+    const section = body[sectionKey] as { tableData?: unknown[] } | undefined;
+    const table = Array.isArray(section?.tableData) ? section.tableData : [];
+    for (const row of table) {
+      const r = row as Record<string, unknown>;
+      const sc = r.stock_column as Record<string, unknown> | undefined;
+      const name = String(sc?.stockName ?? sc?.get_full_name ?? "").trim();
+      const weekRaw = r.week_changeP_mcapw_sec ?? r.week_changeP_mcapw_ind ?? r.week_changeP;
+      const yearRaw = r.year_changeP_mcapw_sec ?? r.year_changeP_mcapw_ind ?? r.year_changeP;
+      const weekPct = Number(weekRaw);
+      const yearPct = Number(yearRaw);
+      if (!name || !Number.isFinite(weekPct)) continue;
+      out.push({
+        name,
+        weekPct,
+        yearPct: Number.isFinite(yearPct) ? yearPct : weekPct,
+      });
+    }
+  }
+
+  return out;
+}
+
 function normalizeToUnitInterval(values: Record<string, number>): Record<string, number> {
   const nums = Object.values(values).filter((v) => Number.isFinite(v));
   if (!nums.length) return {};
@@ -58,45 +119,63 @@ function normalizeToUnitInterval(values: Record<string, number>): Record<string,
   return out;
 }
 
-async function fetchNseIndexChanges(timeoutMs: number): Promise<Array<{ name: string; changePct: number }>> {
+/**
+ * Cap relative scores when the underlying Trendlyne YoY trend is weak (aligns with macro view).
+ */
+function applyAbsoluteTrendPenalty(
+  yearAveraged: Record<string, number>,
+  normalized: Record<string, number>
+): Record<string, number> {
+  const out = { ...normalized };
+  for (const [theme, avgY] of Object.entries(yearAveraged)) {
+    if (!Number.isFinite(avgY)) continue;
+    const cur = out[theme];
+    if (cur === undefined) continue;
+    if (avgY < -15) out[theme] = Math.min(cur, 0.12);
+    else if (avgY < -8) out[theme] = Math.min(cur, 0.22);
+    else if (avgY < 0) out[theme] = Math.min(cur, 0.36);
+  }
+  return out;
+}
+
+type BestMatch = { theme: string; phraseLen: number };
+
+function bestThemeForLabel(label: string, themeNames: string[]): BestMatch | null {
+  const n = label.toLowerCase();
+  let best: BestMatch | null = null;
+  for (const theme of themeNames) {
+    const phrases = THEME_SECTOR_PHRASES[theme];
+    if (!phrases?.length) continue;
+    for (const p of phrases) {
+      if (!p.length) continue;
+      if (n.includes(p)) {
+        if (!best || p.length > best.phraseLen) {
+          best = { theme, phraseLen: p.length };
+        }
+      }
+    }
+  }
+  return best;
+}
+
+async function fetchTrendlyneMarketRows(timeoutMs: number): Promise<TlRow[]> {
   try {
     const res = await fetchWithTimeout(
-      MARKET_SOURCE_URLS.nseAllIndices,
+      TRENDLYNE_MARKET_JSON,
       {
         method: "GET",
         headers: {
           Accept: "application/json,text/plain,*/*",
-          "User-Agent": "Mozilla/5.0",
-          Referer: "https://www.nseindia.com/",
+          "User-Agent": "Mozilla/5.0 (compatible; SentinelFinance/1.0)",
         },
       },
       timeoutMs
     );
     if (!res.ok) return [];
     const json = await res.json().catch(() => null);
-    const rows = Array.isArray(json?.data) ? json.data : [];
-    return rows
-      .map((r: any) => {
-        const name = String(r?.index ?? r?.indexSymbol ?? "").trim();
-        const changePct = Number(r?.percentChange ?? r?.perChange365d ?? r?.percentChange365d ?? NaN);
-        return { name, changePct };
-      })
-      .filter((x: { name: string; changePct: number }) => x.name && Number.isFinite(x.changePct));
+    return extractTrendlyneRows(json);
   } catch {
     return [];
-  }
-}
-
-async function fetchTrendlynePage(timeoutMs: number): Promise<boolean> {
-  try {
-    const res = await fetchWithTimeout(
-      MARKET_SOURCE_URLS.trendlyne,
-      { method: "GET", headers: { "User-Agent": "Mozilla/5.0", Accept: "text/html,*/*" } },
-      timeoutMs
-    );
-    return res.ok;
-  } catch {
-    return false;
   }
 }
 
@@ -105,46 +184,64 @@ export async function getMarketThemeSignals(themeNames: string[]): Promise<Recor
   if (!uniqueThemes.length) return {};
 
   const ttlMs = Number(getEnv("MARKET_SIGNALS_CACHE_TTL_MS", "300000"));
-  const timeoutMs = Number(getEnv("MARKET_SIGNAL_TIMEOUT_MS", "5000"));
+  const timeoutMs = Number(getEnv("MARKET_SIGNAL_TIMEOUT_MS", "8000"));
   const cacheKey = uniqueThemes.join("|");
   const cached = marketSignalCache.get(cacheKey);
   if (cached && Date.now() - cached.cachedAtMs < ttlMs) return cached.signals;
 
-  const [nseRows, trendlyneOk] = await Promise.all([fetchNseIndexChanges(timeoutMs), fetchTrendlynePage(timeoutMs)]);
-  const rawScores: Record<string, number> = {};
+  const rows = await fetchTrendlyneMarketRows(timeoutMs);
+
+  const weekSum: Record<string, number> = {};
+  const yearSum: Record<string, number> = {};
   const counts: Record<string, number> = {};
   const matchedSources: Record<string, Set<string>> = {};
 
   for (const theme of uniqueThemes) {
-    rawScores[theme] = 0;
+    weekSum[theme] = 0;
+    yearSum[theme] = 0;
     counts[theme] = 0;
     matchedSources[theme] = new Set<string>();
-    const keywords = THEME_MARKET_KEYWORDS[theme] ?? [];
-    for (const row of nseRows) {
-      const n = row.name.toLowerCase();
-      if (keywords.some((k) => n.includes(k))) {
-        rawScores[theme] += row.changePct;
-        counts[theme] += 1;
-        matchedSources[theme].add("nse");
-      }
-    }
-    if (trendlyneOk) {
-      // We currently use Trendlyne as a hardcoded source-availability signal;
-      // matched sector movement is derived from NSE index trend data.
-      matchedSources[theme].add("trendlyne");
-    }
   }
 
-  const averaged: Record<string, number> = {};
-  for (const theme of uniqueThemes) {
-    averaged[theme] = counts[theme] > 0 ? rawScores[theme] / counts[theme] : 0;
+  for (const row of rows) {
+    const hit = bestThemeForLabel(row.name, uniqueThemes);
+    if (!hit) continue;
+    const { theme } = hit;
+    weekSum[theme] += row.weekPct;
+    yearSum[theme] += row.yearPct;
+    counts[theme] += 1;
+    matchedSources[theme].add("trendlyne");
   }
-  const normalized = normalizeToUnitInterval(averaged);
+
+  const weekAvg: Record<string, number> = {};
+  const yearAvg: Record<string, number> = {};
+  for (const theme of uniqueThemes) {
+    const c = counts[theme];
+    weekAvg[theme] = c > 0 ? weekSum[theme] / c : Number.NaN;
+    yearAvg[theme] = c > 0 ? yearSum[theme] / c : Number.NaN;
+  }
+
+  const finiteWeek: Record<string, number> = {};
+  for (const theme of uniqueThemes) {
+    const v = weekAvg[theme];
+    if (Number.isFinite(v)) finiteWeek[theme] = v;
+  }
+
+  const normalized = Object.keys(finiteWeek).length
+    ? applyAbsoluteTrendPenalty(
+        yearAvg,
+        normalizeToUnitInterval(
+          Object.fromEntries(Object.entries(finiteWeek).filter(([, v]) => Number.isFinite(v)))
+        )
+      )
+    : {};
 
   const signals: Record<string, MarketThemeSignal> = {};
   for (const theme of uniqueThemes) {
+    const hasData = counts[theme] > 0;
+    const score = hasData ? normalized[theme] ?? 0.5 : 0.5;
     signals[theme] = {
-      score: normalized[theme] ?? 0.5,
+      score: Number.isFinite(score) ? score : 0.5,
       evidenceCount: counts[theme],
       sources: Array.from(matchedSources[theme]),
     };
@@ -152,4 +249,3 @@ export async function getMarketThemeSignals(themeNames: string[]): Promise<Recor
   marketSignalCache.set(cacheKey, { signals, cachedAtMs: Date.now() });
   return signals;
 }
-
